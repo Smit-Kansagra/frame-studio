@@ -1,0 +1,21 @@
+node_modules/
+dist/
+dist-electron/
+build/icon.ico
+release/
+.verification/
+artifacts/
+*.log
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+
+# Local screenshots and temporary editor/OS files
+/test screenshot/
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.tmp
+*.bak
+*.swp

@@ -1,0 +1,4 @@
+{
+  "extends": "./tsconfig.electron.json",
+  "include": ["electron/contracts.cts", "electron/security.cts", "electron/workspace-manager.cts", "electron/storage/**/*.cts", "electron/storage/**/*.mts"]
+}

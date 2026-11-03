@@ -1,0 +1,173 @@
+import { uploadInPage } from './upload-main.js'
+import { editPromptInPage } from './editor-main.js'
+import { captureOriginal, safeMediaUrl } from './result-download.js'
+import { ProjectTabs } from './project-tabs.js'
+// No credentials, private service endpoints, arbitrary script execution, or
+// external messages. Each connection is explicitly paired from the action popup.
+let socket, tabId, selectedOrigin, anchorWindowId, activeContext, running = false
+const completed = new Map()
+// Retain IDs through reconnects. Retrying collection observes the same download
+// rather than clicking Original size again while the first one is still running.
+const resultDownloads = new Map()
+function allowed(value) {
+  try { const u = new URL(value); return u.protocol === 'https:' && !u.username && !u.password && !u.port && (u.hostname === 'flow.google.com' || (u.hostname === 'labs.google' && /^\/fx\/(?:[a-z-]+\/)?tools\/flow(?:\/|$)/i.test(u.pathname))) } catch { return false }
+}
+const projectTabs = new ProjectTabs(chrome, allowed)
+const activeTabId = () => activeContext?.tabId ?? tabId
+function detach() { socket?.close(); socket = undefined; tabId = undefined; selectedOrigin = undefined; completed.clear(); chrome.action.setBadgeText({ text: '' }) }
+async function selectedTab() {
+  if (activeContext) return projectTabs.verify(activeContext, activeContext.url)
+  if (!Number.isInteger(tabId)) { await projectTabs.load(); for(const record of projectTabs.records.values()) { if(record.origin!==selectedOrigin || !Number.isInteger(record.tabId)) continue;try{const candidate=await chrome.tabs.get(record.tabId);if(allowed(candidate.url)&&new URL(candidate.url).origin===selectedOrigin){tabId=record.tabId;break}}catch{} } }
+  if (!Number.isInteger(tabId)) throw new Error('No Flow tab has been explicitly connected.')
+  const tab = await chrome.tabs.get(tabId)
+  if (!allowed(tab.url) || new URL(tab.url).origin !== selectedOrigin) { detach(); throw new Error('Selected tab left the approved Flow origin. Reconnect from the extension action; no login page is controlled.') }
+  return tab
+}
+async function pageAction(action, payload, id) {
+  await selectedTab()
+  await chrome.scripting.executeScript({ target: { tabId: activeTabId() }, files: ['content.js'], world: 'ISOLATED' })
+  const result = await chrome.tabs.sendMessage(activeTabId(), { type: 'frame-flow-command', id, action, payload })
+  if (!result?.ok) throw new Error(result?.error || 'The Flow page did not confirm the action.')
+  return result.value
+}
+async function navigate(url) {
+  const current = await selectedTab()
+  if (!allowed(url) || new URL(url).origin !== selectedOrigin) throw new Error('Cross-origin navigation requires reconnecting the extension on that Flow page.')
+  if (current.url === url) return
+  await chrome.tabs.update(activeTabId(), { url })
+  const deadline = Date.now() + 30000
+  while (Date.now() < deadline) {
+    const tab = await selectedTab()
+    if (tab.status === 'complete' && tab.url === url) return
+    await new Promise(resolve => setTimeout(resolve, 250))
+  }
+  throw new Error('Flow navigation did not finish. Nothing was submitted.')
+}
+async function download(payload, id) {
+  if (!/^[0-9a-f-]{36}$/.test(payload.nonce)) throw new Error('Invalid local download request.')
+  const key = `${payload.url}:${payload.result.id}:${payload.nonce}`
+  let capture, downloadId = resultDownloads.get(key)?.id
+  const native = resultDownloads.get(key)?.native
+  if (!downloadId) {
+  const link = await pageAction('downloadLink', payload, id)
+  if (link.mode === 'native-menu') {
+    capture = await captureOriginal(chrome.downloads, {projectUrl:payload.url, mediaId:payload.result.id, nonce:payload.nonce, title:link.title},
+      () => pageAction('downloadOriginal', payload, `${id}:original`))
+    downloadId = await capture.run()
+  } else {
+    if (!safeMediaUrl(link.url, selectedOrigin)) throw new Error('The visible result download is not a supported Google media URL.')
+    if (!/^(?:png|jpe?g|webp|mp4|mov|webm)$/.test(link.extension)) throw new Error('The visible download has an unsupported format.')
+    downloadId = await chrome.downloads.download({ url: link.url, filename: `Frame Studio/${payload.nonce}.${link.extension}`, saveAs: false, conflictAction: 'uniquify' })
+  }
+  resultDownloads.set(key, { id: downloadId, native: link.mode === 'native-menu' })
+  }
+  try {
+  const deadline = Date.now() + 150000
+  while (Date.now() < deadline) {
+    // Query ONLY the download created above, never global download history.
+    const [item] = await chrome.downloads.search({ id: downloadId })
+    capture?.assertUnique()
+    if (!item || (!capture && !native && !resultDownloads.get(key)?.native && item.byExtensionId !== chrome.runtime.id)) throw new Error('Download association was lost; use manual import.')
+    if (item.danger && !['safe', 'accepted', 'allowlistedByPolicy', 'deepScannedSafe'].includes(item.danger)) throw new Error('Chrome is checking or blocking this download. Review the browser warning yourself; no safety warning is bypassed.')
+    if (item.state === 'complete') { await selectedTab();return { filename: item.filename } }
+    if (item.state === 'interrupted') throw new Error('Chrome interrupted the result download. The generation is preserved.')
+    await new Promise(resolve => setTimeout(resolve, 500))
+  }
+  throw new Error('Result download is still pending in Chrome. Resume collection after it finishes.')
+  } finally { capture?.dispose() }
+}
+async function execute(command) {
+  const { action, payload = {}, id } = command
+  if(command.projectId) activeContext=await projectTabs.select(command.projectId,action,payload.url,selectedOrigin,anchorWindowId)
+  await selectedTab()
+  if (action === 'show') { const tab = await selectedTab(); await chrome.windows.update(tab.windowId, { focused: true }); await chrome.tabs.update(activeTabId(), { active: true }); return null }
+  if (action === 'createProject') {
+    const home = selectedOrigin === 'https://flow.google.com' ? `${selectedOrigin}/` : 'https://labs.google/fx/tools/flow'
+    if(activeContext) {const tab=await selectedTab();if(tab.url!==home)throw new Error('New project tab is not on the Flow homepage. No project was created.')}
+    else await navigate(home)
+    await pageAction('createProject', {}, id)
+    const deadline = Date.now() + 30000
+    while (Date.now() < deadline) { const tab = await selectedTab(); if (/\/project\/[a-zA-Z0-9_-]+/.test(new URL(tab.url).pathname)) { if(activeContext)await projectTabs.created(activeContext,tab.url);return { url: tab.url } }; await new Promise(resolve => setTimeout(resolve, 250)) }
+    throw new Error('Project creation may have completed but its link was not confirmed. Do not create another automatically.')
+  }
+  if (!activeContext && ['prepare', 'results', 'download', 'armSubmit', 'nameProject'].includes(action)) await navigate(payload.url)
+  if (['armSubmit','nameProject'].includes(action)) { const tab = await selectedTab(); await chrome.tabs.update(activeTabId(),{active:true}); await chrome.windows.update(tab.windowId,{focused:true}) }
+  if (action === 'download') return download(payload, id)
+  if (!['inspect', 'nameProject', 'prepare', 'attach', 'checkReference', 'baseline', 'armSubmit', 'confirmSubmit', 'results'].includes(action)) throw new Error('Unsupported companion command.')
+  const value = await pageAction(action, payload, id)
+  await selectedTab()
+  return value
+}
+chrome.runtime.onMessage.addListener((message, sender, reply) => {
+  if (message.type==='frame-flow-edit-prompt' && sender.id===chrome.runtime.id && sender.tab?.id===activeTabId() && running) {
+    ;(async()=>{
+      await selectedTab()
+      const results=await chrome.scripting.executeScript({target:{tabId:activeTabId()},world:'MAIN',func:editPromptInPage,args:[message.prompt,message.nonce]})
+      if(results.length!==1 || results[0].result?.retained!==true) throw new Error('Flow did not confirm the scoped editor action.')
+      return {ok:true,value:results[0].result}
+    })().then(reply).catch(error=>reply({ok:false,error:error.message}))
+    return true
+  }
+  if(message.type==='frame-flow-main-upload' && sender.id===chrome.runtime.id && sender.tab?.id===activeTabId() && running){
+    ;(async()=>{
+      await selectedTab()
+      const results=await chrome.scripting.executeScript({target:{tabId:activeTabId()},world:'MAIN',func:uploadInPage,args:[message.file,message.nonce]})
+      if(results.length!==1 || results[0].result?.assigned!==true) throw new Error('Flow page-context upload was not confirmed.')
+      return {ok:true,value:results[0].result}
+    })().then(reply).catch(error=>reply({ok:false,error:error.message}))
+    return true
+  }
+  if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL('popup.html')) return false
+  if (message.type === 'disconnect') { detach(); reply({ ok: true }); return false }
+  if (message.type === 'upload-diagnostic') {
+    ;(async () => {
+      if (running) throw new Error('Wait until the current Flow action has stopped before saving its diagnostic.')
+      running = true
+      try {
+        const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
+        const selected = await selectedTab()
+        if (active?.id !== selected.id) throw new Error('Open the connected Flow tab first. No other tab is inspected.')
+        const report = await pageAction('uploadDiagnostic', {}, crypto.randomUUID())
+        await chrome.downloads.download({ url: `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(report, null, 2))}`, filename: 'Frame Studio/flow-upload-diagnostic.json', saveAs: true, conflictAction: 'uniquify' })
+        return { ok: true, message: 'Save this diagnostic JSON in the software test screenshot folder. It contains only toolbar control structure; no generation was submitted.' }
+      } finally { running = false }
+    })().then(reply).catch(error => reply({ ok: false, message: error.message }))
+    return true
+  }
+  if (message.type !== 'connect') return false
+  ;(async () => {
+    if (running) throw new Error('A Flow action is active. Wait for completion before changing tabs.')
+    const match = /^(\d{1,5})\.([0-9a-f]{64})$/.exec(message.code || '')
+    if (!match || Number(match[1]) < 1024 || Number(match[1]) > 65535) throw new Error('Paste a fresh pairing code from Frame Studio Settings.')
+    const tab = await chrome.tabs.get(message.tabId)
+    if (!allowed(tab.url)) throw new Error('Open your signed-in Google Flow workspace, then click the extension there.')
+    detach(); tabId = tab.id; selectedOrigin = new URL(tab.url).origin; anchorWindowId = tab.windowId
+    const ws = socket = new WebSocket(`ws://127.0.0.1:${match[1]}/companion`)
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { ws.close(); reject(new Error('Local app did not accept this code. Generate a fresh code.')) }, 10000)
+      ws.onopen = () => ws.send(JSON.stringify({ type: 'pair', token: match[2], url: tab.url }))
+      ws.onerror = () => { clearTimeout(timer); reject(new Error('Frame Studio is not listening. Open the app and generate a new pairing code.')) }
+      ws.onmessage = async event => {
+        try {
+          const command = JSON.parse(event.data)
+          if (command.type === 'paired') { clearTimeout(timer); chrome.action.setBadgeText({ text: 'ON' }); resolve(); return }
+          if (command.type === 'ping') { ws.send(JSON.stringify({ type: 'pong' })); return }
+          if (command.type !== 'command' || typeof command.id !== 'string' || command.id.length > 64) return
+          if (completed.has(command.id)) { ws.send(JSON.stringify(completed.get(command.id))); return }
+          if (running) { ws.send(JSON.stringify({ type: 'reply', id: command.id, projectId:command.projectId, ok: false, error: 'Another companion action is running.' })); return }
+          running = true
+          let response
+          try { response = { type: 'reply', id: command.id, projectId:command.projectId, ok: true, value: await execute(command) } }
+          catch (error) { response = { type: 'reply', id: command.id, projectId:command.projectId, ok: false, error: error.message } }
+          finally { running = false; activeContext=undefined }
+          completed.set(command.id, response); if (completed.size > 200) completed.delete(completed.keys().next().value)
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(response))
+        } catch { ws.close() }
+      }
+      ws.onclose = () => { clearTimeout(timer); if (socket === ws) detach(); reject(new Error('Connection closed. Pair again from the selected Flow tab.')) }
+    })
+    return { ok: true, message: 'Paired. Generate in Frame Studio opens each project in its own Flow tab. Keep Chrome open. Disconnect here any time.' }
+  })().then(reply).catch(error => reply({ ok: false, message: error.message }))
+  return true
+})
+chrome.tabs.onRemoved.addListener(id => { if (id === tabId) tabId=undefined;void projectTabs.removed(id).catch(()=>{}) })

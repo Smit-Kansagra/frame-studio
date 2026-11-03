@@ -1,0 +1,118 @@
+{
+  "name": "frame-studio",
+  "version": "0.13.0-preview.37",
+  "private": true,
+  "description": "A personal Windows studio for product photos, posts, and reels.",
+  "type": "module",
+  "main": "dist-electron/main.cjs",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:ui": "vite --host 127.0.0.1",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
+    "build": "npm run typecheck && vite build && tsc -p tsconfig.electron.json",
+    "build:installer": "npm run build && node scripts/build-icon.mjs && node scripts/package-win.mjs --isolated-output",
+    "package:win": "npm run build && node scripts/build-icon.mjs && node scripts/check-package-input.mjs && node scripts/package-win.mjs && node scripts/check-package-output.mjs",
+    "check:package-input": "node scripts/build-icon.mjs && node scripts/check-package-input.mjs --config-only",
+    "check:package": "node scripts/check-shell.mjs --unpacked \"release/win-unpacked/Frame Studio.exe\"",
+    "check:package-output": "node scripts/check-package-output.mjs",
+    "start": "electron .",
+    "preview": "vite preview --host 127.0.0.1",
+    "check:shell": "node scripts/check-shell.mjs",
+    "check:storage": "tsc -p tsconfig.storage.json && node scripts/check-storage.mjs && node scripts/check-storage.mjs --verify-restart",
+    "check:products": "tsc -p tsconfig.storage.json && node scripts/check-products.mjs && node scripts/check-products.mjs --verify-restart",
+    "check:themes": "tsc -p tsconfig.storage.json && node scripts/check-themes.mjs && node scripts/check-themes.mjs --verify-restart",
+    "check:characters": "tsc -p tsconfig.storage.json && node scripts/check-characters.mjs && node scripts/check-characters.mjs --verify-restart",
+    "check:projects": "tsc -p tsconfig.storage.json && node scripts/check-projects.mjs && node scripts/check-projects.mjs --verify-restart",
+    "check:flow": "tsc -p tsconfig.electron.json && node scripts/check-flow.mjs",
+    "check:companion": "tsc -p tsconfig.electron.json && node scripts/check-companion.mjs",
+    "check:extension-browser": "node scripts/check-flow-extension-browser.mjs",
+    "check:reel-export": "tsc -p tsconfig.storage.json && node scripts/check-reel-export.mjs"
+  },
+  "dependencies": {
+    "onnxruntime-node": "1.31.1",
+    "playwright-core": "1.61.1",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "sharp": "0.34.5",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.4",
+    "@types/ws": "8.18.2",
+    "electron": "45.0.0",
+    "electron-builder": "26.18.0",
+    "playwright": "1.61.1",
+    "typescript": "6.0.3",
+    "vite": "8.1.5"
+  },
+  "build": {
+    "appId": "local.frame-studio",
+    "productName": "Frame Studio",
+    "executableName": "Frame Studio",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "asar": true,
+    "afterPack": "scripts/wait-win-executable.cjs",
+    "asarUnpack": [
+      "node_modules/sharp/**",
+      "node_modules/@img/**",
+      "node_modules/onnxruntime-node/**"
+    ],
+    "extraResources": [
+      {
+        "from": "extension",
+        "to": "flow-companion",
+        "filter": [
+          "*.json",
+          "*.js",
+          "*.html",
+          "*.css",
+          "README.md"
+        ]
+      },
+      {
+        "from": "electron/flow-native-submit.ps1",
+        "to": "flow-native-submit.ps1"
+      }
+    ],
+    "allowMissingDependencies": false,
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json",
+      "third-party/**/*",
+      "node_modules/**/*",
+      "!node_modules/onnxruntime-node/bin/**/darwin/**",
+      "!node_modules/onnxruntime-node/bin/**/linux/**",
+      "!node_modules/onnxruntime-node/bin/**/win32/arm64/**",
+      "!**/*.map"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Frame-Studio-${version}-${arch}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}

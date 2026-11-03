@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Frame Studio Flow Companion (Preview)",
+  "version": "0.1.6",
+  "version_name": "0.1.6-fast.22",
+  "minimum_chrome_version": "116",
+  "description": "Connect Frame Studio to Google Flow with separate project tabs. No password or cookie access.",
+  "permissions": ["activeTab", "scripting", "downloads", "storage"],
+  "host_permissions": ["http://127.0.0.1/*", "https://flow.google.com/*", "https://labs.google/fx/tools/flow*", "https://labs.google/fx/*/tools/flow*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_title": "Connect this Flow tab to Frame Studio", "default_popup": "popup.html" },
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; connect-src ws://127.0.0.1:*" }
+}

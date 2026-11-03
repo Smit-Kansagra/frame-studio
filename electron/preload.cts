@@ -1,0 +1,101 @@
+import { contextBridge, ipcRenderer } from 'electron'
+import type { ExportProgress, FrameStudioAPI,LogoReview } from './contracts.cjs'
+
+// Type-only imports are erased: sandboxed preload never requires local modules.
+const bridge: FrameStudioAPI = {
+  platform: 'windows', phase: 11,
+  flow: {
+    activeRequest: id => id ? ipcRenderer.invoke('flow:active-request', id) : ipcRenderer.invoke('flow:active-request'),
+    status: () => ipcRenderer.invoke('flow:status'),
+    connect: () => ipcRenderer.invoke('flow:connect'),
+    open: () => ipcRenderer.invoke('flow:open'),
+    show: () => ipcRenderer.invoke('flow:show'),
+    check: () => ipcRenderer.invoke('flow:check'),
+    disconnect: () => ipcRenderer.invoke('flow:disconnect'),
+    openManual: () => ipcRenderer.invoke('flow:open-manual'),
+    project: id => ipcRenderer.invoke('flow:project', id),
+    linkProject: (id, url) => ipcRenderer.invoke('flow:link-project', id, url),
+    job: id => ipcRenderer.invoke('flow:job', id),
+    jobs: id => ipcRenderer.invoke('flow:jobs', id),
+    generate: (id, sceneId, outputs) => ipcRenderer.invoke('flow:generate', id, sceneId, outputs),
+    generatePosts: id => ipcRenderer.invoke('flow:generate-posts', id),
+    resume: id => ipcRenderer.invoke('flow:resume', id),
+    resumePosts: id => ipcRenderer.invoke('flow:resume-posts', id),
+    pairCompanion: () => ipcRenderer.invoke('flow:pair-companion'),
+    copyPairingCode: () => ipcRenderer.invoke('flow:copy-pairing-code'),
+    openExtensionFolder: () => ipcRenderer.invoke('flow:extension-folder'),
+    openResultsFolder: id => ipcRenderer.invoke('flow:results-folder', id),
+  },
+  projects: {
+    list: () => ipcRenderer.invoke('projects:list'),
+    get: id => ipcRenderer.invoke('projects:get', id),
+    save: draft => ipcRenderer.invoke('projects:save', draft),
+    trash: (id, revision) => ipcRenderer.invoke('projects:trash', id, revision),
+    deleted: () => ipcRenderer.invoke('projects:deleted'),
+    restore: (id, revision) => ipcRenderer.invoke('projects:restore', id, revision),
+    deletePermanently: (id, revision) => ipcRenderer.invoke('projects:delete-permanently', id, revision),
+  },
+  generations: {
+    list: projectId => ipcRenderer.invoke('generations:list', projectId),
+    prepare: (projectId, sceneId) => ipcRenderer.invoke('generations:prepare', projectId, sceneId),
+    setState: (id, state) => ipcRenderer.invoke('generations:set-state', id, state),
+    importResult: id => ipcRenderer.invoke('generations:import-result', id),
+    reviews: projectId => ipcRenderer.invoke('generations:reviews', projectId),
+    review: (projectId, sceneId, attemptId, status, note) => ipcRenderer.invoke('generations:review', projectId, sceneId, attemptId, status, note),
+    logoReviews: projectId => ipcRenderer.invoke('generations:logo-reviews', projectId),
+    reviewLogo: (id,status) => ipcRenderer.invoke('generations:review-logo', id,status),
+    retryLogo: (id,area) => area ? ipcRenderer.invoke('generations:retry-logo', id,area) : ipcRenderer.invoke('generations:retry-logo', id),
+    approvePost: (id,note) => ipcRenderer.invoke('generations:approve-post',id,note),
+    onLogoProgress: callback=>{const listener=(_event:unknown,value:LogoReview)=>callback(value);ipcRenderer.on('generations:logo-progress',listener);return()=>ipcRenderer.removeListener('generations:logo-progress',listener)},
+  },
+  exports: {
+    inspect: projectId => ipcRenderer.invoke('exports:inspect', projectId),
+    start: (projectId, settings) => ipcRenderer.invoke('exports:start', projectId, settings),
+    startPostBatch: projectId => ipcRenderer.invoke('exports:start-post-batch', projectId),
+    cancel: projectId => ipcRenderer.invoke('exports:cancel', projectId),
+    openFolder: exportId => ipcRenderer.invoke('exports:open-folder', exportId),
+    onProgress: callback => {
+      const listener = (_event: unknown, progress: ExportProgress) => callback(progress)
+      ipcRenderer.on('exports:progress', listener)
+      return () => ipcRenderer.removeListener('exports:progress', listener)
+    },
+  },
+  workspace: {
+    status: () => ipcRenderer.invoke('workspace:status'),
+    retry: () => ipcRenderer.invoke('workspace:retry'),
+  },
+  images: {
+    chooseAndImport: () => ipcRenderer.invoke('images:choose-and-import'),
+    chooseManyAndImport: (limit = 20) => ipcRenderer.invoke('images:choose-many-and-import', limit),
+    get: (id: string) => ipcRenderer.invoke('images:get', id),
+    transform: (id, edit) => ipcRenderer.invoke('images:transform', id, edit),
+  },
+  themes: {
+    list: () => ipcRenderer.invoke('themes:list'),
+    get: id => ipcRenderer.invoke('themes:get', id),
+    save: draft => ipcRenderer.invoke('themes:save', draft),
+    duplicate: (id, revision) => ipcRenderer.invoke('themes:duplicate', id, revision),
+    remove: (id, revision) => ipcRenderer.invoke('themes:remove', id, revision),
+    trash: () => ipcRenderer.invoke('themes:trash'),
+    undo: token => ipcRenderer.invoke('themes:undo', token),
+    importPrompt: () => ipcRenderer.invoke('themes:import-prompt'),
+  },
+  characters: {
+    list: () => ipcRenderer.invoke('characters:list'),
+    get: id => ipcRenderer.invoke('characters:get', id),
+    save: draft => ipcRenderer.invoke('characters:save', draft),
+    duplicate: (id, revision) => ipcRenderer.invoke('characters:duplicate', id, revision),
+    remove: (id, revision) => ipcRenderer.invoke('characters:remove', id, revision),
+    trash: () => ipcRenderer.invoke('characters:trash'),
+    undo: token => ipcRenderer.invoke('characters:undo', token),
+  },
+  products: {
+    list: (search = '') => ipcRenderer.invoke('products:list', search),
+    get: id => ipcRenderer.invoke('products:get', id),
+    save: draft => ipcRenderer.invoke('products:save', draft),
+    remove: (id, revision) => ipcRenderer.invoke('products:remove', id, revision),
+    trash: () => ipcRenderer.invoke('products:trash'),
+    undo: token => ipcRenderer.invoke('products:undo', token),
+  },
+}
+contextBridge.exposeInMainWorld('frameStudio', bridge)
