@@ -4,6 +4,10 @@ export class StorageError extends Error {
   constructor(readonly code: ErrorCode, message: string) { super(message); this.name = 'StorageError' }
 }
 
+export class FlowNotSubmittedError extends StorageError {
+  constructor(message:string){super('INVALID_REQUEST',message);this.name='FlowNotSubmittedError'}
+}
+
 export function failure(error: unknown, fallback: ErrorCode = 'STORAGE_UNAVAILABLE'): AppResult<never> {
   if (error instanceof StorageError) return { ok: false, error: { code: error.code, message: error.message } }
   const messages: Partial<Record<ErrorCode, string>> = {

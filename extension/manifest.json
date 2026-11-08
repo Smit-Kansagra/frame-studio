@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Frame Studio Flow Companion (Preview)",
   "version": "0.1.6",
-  "version_name": "0.1.6-fast.22",
+  "version_name": "0.1.6-fast.24",
   "minimum_chrome_version": "116",
   "description": "Connect Frame Studio to Google Flow with separate project tabs. No password or cookie access.",
   "permissions": ["activeTab", "scripting", "downloads", "storage"],

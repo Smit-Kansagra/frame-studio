@@ -5,16 +5,18 @@ import type { IconName } from './icons'
 import { StorageStatus } from './StorageStatus'
 import { Themes } from './Themes'
 import { Characters } from './Characters'
+import { ProductFind } from './ProductFind'
 import { Studio as ProjectStudio } from './Studio'
 import type { FlowConnection } from '../electron/contracts.cjs'
 
-type Page = 'studio' | 'themes' | 'characters' | 'settings'
+type Page = 'studio' | 'themes' | 'characters' | 'product-find' | 'settings'
 type LibraryPage = 'themes' | 'characters'
 
 const pages: Record<Page, { title: string; description: string; icon: IconName }> = {
   studio: { title: 'Studio', description: 'A little space for your next big idea.', icon: 'studio' },
   themes: { title: 'Themes', description: 'A creative direction you can come back to.', icon: 'theme' },
   characters: { title: 'Characters', description: 'Familiar faces for a consistent story.', icon: 'character' },
+  'product-find': { title: 'Product Find', description: 'Discover products for your Instagram pages. Download photos and copy original links.', icon: 'product' },
   settings: { title: 'Settings', description: 'Make yourself at home.', icon: 'settings' },
 }
 
@@ -171,12 +173,12 @@ export function App() {
     <aside className="sidebar" aria-label="Workspace sidebar">
       <a className="brand" href="#studio" aria-label="Frame Studio home"><span className="brand-symbol"><i /><i /></span><span>frame<span className="brand-studio">studio</span></span></a>
       <div className="sidebar-label">WORKSPACE</div>
-      <nav aria-label="Main navigation"><ul>{(['studio', 'themes', 'characters'] as const).map((item) => <li key={item}><a className={`nav-link ${page === item ? 'is-active' : ''}`} href={`#${item}`} aria-current={page === item ? 'page' : undefined}><Icon name={pages[item].icon} size={19} /><span>{pages[item].title}</span>{page === item && <span className="nav-active-dot" />}</a></li>)}</ul></nav>
+      <nav aria-label="Main navigation"><ul>{(['studio', 'themes', 'characters', 'product-find'] as const).map((item) => <li key={item}><a className={`nav-link ${page === item ? 'is-active' : ''}`} href={`#${item}`} aria-current={page === item ? 'page' : undefined}><Icon name={pages[item].icon} size={19} /><span>{pages[item].title}</span>{page === item && <span className="nav-active-dot" />}</a></li>)}</ul></nav>
       <div className="sidebar-bottom"><a className={`nav-link settings-nav ${page === 'settings' ? 'is-active' : ''}`} href="#settings" aria-current={page === 'settings' ? 'page' : undefined}><Icon name="settings" size={19} /><span>Settings</span>{page === 'settings' && <span className="nav-active-dot" />}</a><div className="sidebar-footer"><span className="avatar">ME</span><div><strong>My workspace</strong><span>Personal edition</span></div><Icon name="lock" size={14} /></div></div>
     </aside>
     <div className="main-column">
-      <header className="topbar"><div className="page-heading"><h1 id="main-content" tabIndex={-1} ref={heading}>{pages[page].title}</h1><p>{pages[page].description}</p></div><div className="topbar-actions"><ConnectionStatus /><button className="theme-toggle" type="button" onClick={toggleTheme} aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'} title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}><Icon name={theme === 'light' ? 'moon' : 'sun'} size={17} /><span>{theme === 'light' ? 'Dark mode' : 'Light mode'}</span></button>{page === 'studio' ? route.split('/')[1] ? <a className="button button-secondary" href="#studio">All projects</a> : window.frameStudio?.projects ? <a className="button button-primary button-small" href="#studio/new"><Icon name="plus" size={18} />New project</a> : <button className="button button-secondary" disabled>New project · Desktop app required</button> : page !== 'settings' ? route.split('/')[1] ? <a className="button button-secondary" href={`#${page}`}>Back to {page}</a> : window.frameStudio?.[page] ? <a className="button button-primary" href={`#${page}/new`}><Icon name="plus" size={18} />Add {library[page].singular}</a> : <button className="button button-secondary" disabled title="Open the desktop app to manage your library.">Add {library[page].singular} · Desktop app required</button> : null}</div></header>
-      <main className="page-scroll" ref={content} aria-labelledby="main-content"><div className={`page-content page-${page}`}>{page === 'studio' ? <ProjectStudio route={route.startsWith('#studio') ? route : '#studio'} onDirty={onDirty} onBusy={onBusy} /> : page === 'settings' ? <Settings /> : page === 'themes' ? <Themes route={route} onDirty={onDirty} onBusy={onBusy} /> : <Characters route={route} onDirty={onDirty} onBusy={onBusy} />}</div></main>
+      <header className="topbar"><div className="page-heading"><h1 id="main-content" tabIndex={-1} ref={heading}>{pages[page].title}</h1><p>{pages[page].description}</p></div><div className="topbar-actions"><ConnectionStatus /><button className="theme-toggle" type="button" onClick={toggleTheme} aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'} title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}><Icon name={theme === 'light' ? 'moon' : 'sun'} size={17} /><span>{theme === 'light' ? 'Dark mode' : 'Light mode'}</span></button>{page === 'studio' ? route.split('/')[1] ? <a className="button button-secondary" href="#studio">All projects</a> : window.frameStudio?.projects ? <a className="button button-primary button-small" href="#studio/new"><Icon name="plus" size={18} />New project</a> : <button className="button button-secondary" disabled>New project · Desktop app required</button> : (page === 'themes' || page === 'characters') ? route.split('/')[1] ? <a className="button button-secondary" href={`#${page}`}>Back to {page}</a> : window.frameStudio?.[page] ? <a className="button button-primary" href={`#${page}/new`}><Icon name="plus" size={18} />Add {library[page].singular}</a> : <button className="button button-secondary" disabled title="Open the desktop app to manage your library.">Add {library[page].singular} · Desktop app required</button> : null}</div></header>
+      <main className="page-scroll" ref={content} aria-labelledby="main-content"><div className={`page-content page-${page}`}>{page === 'studio' ? <ProjectStudio route={route.startsWith('#studio') ? route : '#studio'} onDirty={onDirty} onBusy={onBusy} /> : page === 'product-find' ? <ProductFind /> : page === 'settings' ? <Settings /> : page === 'themes' ? <Themes route={route} onDirty={onDirty} onBusy={onBusy} /> : <Characters route={route} onDirty={onDirty} onBusy={onBusy} />}</div></main>
     </div>
   </div>
 }

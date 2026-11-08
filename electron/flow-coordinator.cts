@@ -3,7 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import type { FlowJob, FlowProject } from './contracts.cjs'
 import type { Workspace } from './storage/workspace.cjs'
 import type { FlowBrowser, FlowRequest } from './flow-browser.cjs'
-import { StorageError } from './storage/errors.cjs'
+import { StorageError,FlowNotSubmittedError } from './storage/errors.cjs'
 import { isFlowProject } from './flow-urls.cjs'
 import { interruptActivity, planPreparation, recordActivity, referenceLabels } from './flow-progress.cjs'
 import type { FlowReporter } from './flow-progress.cjs'
@@ -24,7 +24,8 @@ export class FlowCoordinator {
   private finishOperation?: () => void
   private owner?: string
   private stopping = false
-  private currentOperation?: { projectId: string; cancelled: boolean; mapping?: FlowProject }
+  private currentOperation?: { projectId: string; cancelled: boolean; mapping?: FlowProject;batchId?:string }
+  private readonly preparationRetries=new Set<string>()
   private sweeping = false
   private sweepDone?: Promise<void>
   private readonly processing = new Set<string>()
@@ -132,6 +133,7 @@ export class FlowCoordinator {
     if (!Number.isInteger(outputs) || outputs < 1 || outputs > 4) throw new StorageError('INVALID_REQUEST', 'Choose between 1 and 4 results per generation.')
     const source = await this.workspace(), sourceProject = await source.projects.get(projectId)
     if (sourceProject.outputType === 'post' && !(await source.generations.list(projectId)).some(item => item.sceneId === sceneId && item.state === 'ready-for-review')) return this.startPosts(projectId)
+    if(sourceProject.outputType==='post'&&(await source.generations.reviews(projectId)).some(review=>review.sceneId===sceneId&&review.status==='needs-changes'&&review.selectedAttemptId&&review.note.trim()))return this.queuePostRevision(source,projectId,sceneId)
     this.claim(projectId)
     const operation = this.currentOperation!
     try {
@@ -146,6 +148,31 @@ export class FlowCoordinator {
       return job
     } catch (error) { this.release(); throw error }
   }
+  private async queuePostRevision(ws:Workspace,projectId:string,sceneId:string):Promise<FlowJob>{
+    if(this.stopping||this.scopeProjectId&&projectId!==this.scopeProjectId)throw new StorageError('INVALID_REQUEST','This project queue is unavailable.')
+    const attempt=await ws.generations.prepareDeferredRevision(projectId,sceneId)
+    const saved=ws.flow.job(attempt.id)!
+    if(!saved.editQueued)return saved
+    const batchId=this.currentOperation?.projectId===projectId?this.currentOperation.batchId:undefined
+    const job=ws.flow.saveJob({attemptId:attempt.id,projectId,stage:'preparing',editQueued:true,message:'Image changes queued with this exact image and description. Other products keep generating.',projectUrl:'',baseline:[],resultIds:[],imported:{},outputs:1,updatedAt:'',...(batchId?{postBatch:{id:batchId,index:1,total:1,productName:'Image changes'}}:{})})
+    if(batchId)this.preparationRetries.add(attempt.id)
+    else await this.drainQueuedEdits()
+    return job
+  }
+  async drainQueuedEdits():Promise<void>{
+    if(this.stopping||this.busy||this.sweeping)return
+    const ws=await this.workspace()
+    if(this.stopping||this.busy||this.sweeping)return
+    const job=ws.flow.queuedEdits().find(item=>!this.scopeProjectId||item.projectId===this.scopeProjectId)
+    if(!job)return
+    this.claim(job.projectId)
+    try{
+      const active=ws.generations.active(job.projectId)
+      if(active&&active.id!==job.attemptId&&!ws.flow.job(active.id)?.editQueued){this.release();return}
+      await ws.generations.activateRevision(job.attemptId)
+      this.launch(ws.flow.saveJob({...job,editQueued:false,message:'Applying queued image changes in this project.'}),true,ws)
+    }catch(error){this.release();if(!(error instanceof StorageError&&error.code==='BUSY')){await ws.generations.setState(job.attemptId,'failed');ws.flow.saveJob({...job,editQueued:false,stage:'needs-attention',message:message(error)})}}
+  }
   async startPosts(projectId: string): Promise<FlowJob> {
     this.claim(projectId)
     const operation = this.currentOperation!
@@ -155,6 +182,7 @@ export class FlowCoordinator {
       if (ws.generations.active(this.parallelProjects ? projectId : undefined)) throw new StorageError('BUSY', 'Resolve this project’s active or uncertain request before generating remaining products.')
       const attempts = await ws.generations.list(projectId)
       const batchId = randomUUID()
+      operation.batchId=batchId
       const pending = postPhotos(project).filter(photo => !attempts.some(attempt => attempt.sceneId === photo.id && attempt.state === 'ready-for-review'))
       if (!pending.length) throw new StorageError('INVALID_REQUEST', 'Every product already has a saved image. Select a product to regenerate only that image.')
       // Validate the complete queue before spending credits on its first item.
@@ -181,30 +209,72 @@ export class FlowCoordinator {
             const current = ws.flow.job(id)!
             await this.run(current, false, 'poll')
             const saved = ws.flow.job(id)!
-            if (['complete','needs-attention'].includes(saved.stage)) {
+            if (saved.stage==='complete'||saved.stage==='needs-attention'&&(saved.collectionStopped||!saved.nextCollectionAt||/timed out|within 15 minutes/i.test(saved.message))) {
               inFlight = inFlight.filter(item => item !== id)
-              if (saved.stage === 'needs-attention') blocked = true
+              if (saved.stage === 'needs-attention'&&!saved.submissionAcknowledged) blocked = true
             }
           }))
+          if(!inFlight.length&&ws.flow.jobs(projectId).filter(item=>!item.abandoned&&ws.generations.get(item.attemptId).state==='submission-uncertain').length>=3)blocked=true
           if (inFlight.length && !this.stopping && !operation.cancelled) await delay(this.pollMs)
         }
-        for (let index = 0; index < pending.length; index++) {
-          while (inFlight.length && (inFlight.length >= 3 || (this.browser.capacityAvailable && !await this.browser.capacityAvailable())) && !this.stopping && !operation.cancelled) await collectRound()
+        let index=0
+        while(index<pending.length||this.preparationRetries.size||inFlight.length){
+          while (inFlight.length && (inFlight.length >= 3 || (this.browser.capacityAvailable ? !await this.browser.capacityAvailable() : ws.generations.submittedCount()>=3)) && !this.stopping && !operation.cancelled) await collectRound()
           if (blocked || this.stopping || operation.cancelled) break
-          if (index) job = await prepare(index)
+          if(index>=pending.length&&!this.preparationRetries.size){await collectRound();continue}
+          const retryId=this.preparationRetries.values().next().value as string|undefined
+          if(retryId){
+            this.preparationRetries.delete(retryId)
+            try{
+              const queued=ws.flow.job(retryId)!
+              if(queued.editQueued){await ws.generations.activateRevision(retryId,batchId);job=ws.flow.saveJob({...queued,editQueued:false,message:'Applying queued image changes in this project.'})}
+              else job=await this.prepareRetry(ws,retryId,batchId)
+            }catch(error){const saved=ws.flow.job(retryId);if(saved&&!saved.editQueued)ws.flow.saveJob({...saved,retryQueued:false,stage:'needs-attention',message:message(error)});continue}
+          }else{
+            if(index&&(await ws.generations.list(projectId)).some(a=>a.sceneId===pending[index].id&&a.state==='ready-for-review')){index++;continue}
+            job=index?await prepare(index):first;index++
+          }
           await this.run(job, true, 'submit-only')
           const submitted = ws.flow.job(job.attemptId)!
           if (submitted.stage === 'waiting' && submitted.submissionAcknowledged) inFlight.push(job.attemptId)
-          else { blocked = true; break }
+          else if(ws.generations.get(job.attemptId).state!=='failed'){ blocked = true; break }
         }
         while (inFlight.length && !this.stopping && !operation.cancelled) await collectRound()
       })().catch(error => {
         for (const previous of ws.flow.jobs(projectId)) {
           if (previous.postBatch?.id === batchId && previous.stage !== 'complete' && !previous.abandoned && !operation.cancelled) ws.flow.saveJob({ ...previous, stage: 'needs-attention', message: message(error), activity: interruptActivity(previous.activity, message(error)) })
         }
-      }).finally(() => this.release())
+      }).finally(() => {this.clearQueuedRetries(ws);this.release()})
       return first
     } catch (error) { this.release(); throw error }
+  }
+  private clearQueuedRetries(ws:Workspace){
+    for(const id of this.preparationRetries){const job=ws.flow.job(id);if(job&&!job.abandoned&&!job.editQueued)ws.flow.saveJob({...job,retryQueued:false,stage:'needs-attention',message:'Retry paused with this project queue. Click Retry generation to restart this product.'})}
+    this.preparationRetries.clear()
+  }
+  private async prepareRetry(ws:Workspace,id:string,batchId?:string):Promise<FlowJob>{
+    const job=ws.flow.job(id)!
+    await ws.generations.retryPreparation(id,batchId,this.parallelProjects)
+    return ws.flow.saveJob({...job,stage:'preparing',retryQueued:false,generationFailed:false,submissionAcknowledged:undefined,submissionRejected:undefined,submittedAt:undefined,collectionStopped:false,collectionFailures:0,nextCollectionAt:undefined,baseline:[],resultIds:[],imported:{},activity:[],...(batchId?{postBatch:{index:1,total:1,productName:'Retried product',...job.postBatch,id:batchId}}:{}),message:'Retrying this product: uploading its saved references and prompt again.'})
+  }
+  async retry(attemptId:string):Promise<FlowJob>{
+    const ws=await this.workspace(),job=ws.flow.job(attemptId)
+    if(!job||job.abandoned||ws.projects.isDeleted(job.projectId)||this.scopeProjectId&&job.projectId!==this.scopeProjectId)throw new StorageError('INVALID_REQUEST','This saved request is not available for retry.')
+    const attempt=ws.generations.get(attemptId)
+    if(attempt.state==='ready-for-review')return ws.flow.saveJob({...job,stage:'complete',message:'This image is already saved locally.'})
+    if((await ws.generations.list(job.projectId)).some(a=>a.sceneId===attempt.sceneId&&a.state==='ready-for-review'&&a.createdAt>attempt.createdAt))throw new StorageError('INVALID_REQUEST','This product already has a newer saved image. Open that image in Clips.')
+    if(attempt.state==='submission-uncertain'){
+      if(this.busy){return ws.flow.saveJob({...job,stage:job.submissionAcknowledged?'waiting':'submitting',collectionStopped:false,nextCollectionAt:undefined,collectionFailures:0,message:'Checking this already submitted request again. Its photos will not be uploaded twice.'})}
+      return this.resume(attemptId)
+    }
+    if(attempt.state!=='failed'||job.submissionAcknowledged&&!job.generationFailed||job.resultIds.length||job.submittedAt&&!job.submissionRejected&&!job.generationFailed)throw new StorageError('BUSY','This product already has an active or uncertain request. Check its existing status first.')
+    if(this.busy&&this.currentOperation?.projectId===job.projectId&&this.currentOperation.batchId){
+      this.preparationRetries.add(attemptId)
+      return ws.flow.saveJob({...job,retryQueued:true,message:'Retry queued for this product. It starts after the current upload finishes; other products keep running.'})
+    }
+    if(this.sweeping)await this.sweepDone
+    this.claim(job.projectId)
+    try{const retried=await this.prepareRetry(ws,attemptId);this.launch(retried,true,ws);return retried}catch(error){this.release();throw error}
   }
   async resume(attemptId: string): Promise<FlowJob> {
     this.claim(attemptId)
@@ -295,7 +365,7 @@ export class FlowCoordinator {
         report({ id: 'local', label: 'Local request', state: 'done', detail: `${files.length} saved reference file(s) resolved locally. Upload confirmation is shown separately below.` })
         const submitOnce = async () => {
           check()
-          if (this.browser.submission) report({ id: 'browser-queue', label: 'Project browser queue', state: 'done', detail: 'A request slot is reserved for this project. Its dedicated tab keeps references separate; completed results receive priority between upload commands.' })
+          if (this.browser.submission) report({ id: 'browser-queue', label: 'Project browser queue', state: 'done', detail: 'This project is working in its own tab. Other projects upload independently; completed results receive priority within this tab.' })
           if (this.stopping) throw new StorageError('BUSY', 'Frame Studio is closing. This request was not submitted.')
           const mapping = await this.ensureProject(ws, job.projectId, report)
           update({ projectUrl: mapping.url! })
@@ -312,7 +382,7 @@ export class FlowCoordinator {
           report({ id: 'submit', label: 'Submit generation', state: 'done', detail: 'Flow acknowledged submission through its cleared prompt, new generation card, or generation progress. Completion is confirmed only when matching results are collected.' })
         }
         if (this.browser.submission) {
-          report({ id: 'browser-queue', label: 'Project browser queue', state: 'running', detail: 'Waiting for this project’s browser turn and a free Flow request slot. Other submitted projects can continue generating.' })
+          report({ id: 'browser-queue', label: 'Project browser queue', state: 'running', detail: 'Preparing this project in its own tab. Other project tabs upload and collect results independently.' })
           await this.browser.submission(submitOnce, attempt.id)
         }
         else await submitOnce()
@@ -381,10 +451,14 @@ export class FlowCoordinator {
       if(current.outputType==='post')ws.generations.failLogoCleanup(current.id,message(error))
       if (current.state === 'queued') await ws.generations.setState(current.id, 'failed')
       const detail = error instanceof Error ? error.message : message(error)
-      const retry = collecting && current.state === 'submission-uncertain' && retryCollection(detail) && !this.stopping
+      const rejected=!job.submissionAcknowledged&&/^Flow rejected submission:/.test(detail)
+      const generationFailed=collecting&&/^Flow generation failed:/.test(detail)
+      const notSubmitted=error instanceof FlowNotSubmittedError
+      if((rejected||notSubmitted||generationFailed)&&current.state==='submission-uncertain')await ws.generations.setState(current.id,'failed')
+      const retry = !notSubmitted&&!rejected&&!generationFailed&&collecting && current.state === 'submission-uncertain' && retryCollection(detail) && !this.stopping
       const failures = (job.collectionFailures ?? 0) + 1
       const retryMs = /result information panel|result prompt is not available/i.test(detail) ? Math.min(2000, this.pollMs) : Math.min(60_000, this.pollMs * 2 ** Math.min(failures, 5))
-      update({ stage: retry && failures < 3 && !/timed out|within 15 minutes|disconnected|connection ended|Pair the companion/i.test(detail) ? 'waiting' : 'needs-attention', collectionStopped: collecting ? !retry : undefined, collectionFailures: failures, nextCollectionAt: retry ? new Date(Date.now() + retryMs).toISOString() : undefined, message: retry ? `Automatic collection will retry this existing result. No new generation will be submitted. ${detail}` : message(error), activity: retry ? job.activity : interruptActivity(job.activity, message(error)) })
+      update({ stage: retry && failures < 3 && !/timed out|within 15 minutes|disconnected|connection ended|Pair the companion/i.test(detail) ? 'waiting' : 'needs-attention',generationFailed:generationFailed||job.generationFailed,...(generationFailed?{submissionAcknowledged:true}:{}),submissionRejected:rejected||job.submissionRejected,...(notSubmitted?{submittedAt:undefined}:{}), collectionStopped: collecting ? !retry : undefined, collectionFailures: failures, nextCollectionAt: retry ? new Date(Date.now() + retryMs).toISOString() : undefined, message: retry ? `Automatic collection will retry this existing result. No new generation will be submitted. ${detail}` : message(error), activity: retry ? job.activity : interruptActivity(job.activity, message(error)) })
     }
   }
   async close() { this.stopping = true; await this.running; await this.sweepDone }

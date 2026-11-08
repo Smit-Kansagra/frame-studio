@@ -105,6 +105,9 @@ function GenerationPanel({ project: initialProject, scene: initialScene, prompt:
   const [selectedVersionId, setSelectedVersionId] = useState('')
   const [markAttempt,setMarkAttempt]=useState<string>()
   const [changingProducts,setChangingProducts]=useState(new Set<string>())
+  const [retrying,setRetrying]=useState(new Set<string>())
+  const retryLocks=useRef(new Set<string>())
+  const approvingAll=useRef(false)
   const cleanup=useLogoCleanup(project.id,project.outputType==='post',attempts,selectedVersionId)
   const [reviewDrafts,setReviewDrafts] = useState(()=>new Map<string,string>())
   const swipeStart = useRef<number | null>(null)
@@ -133,6 +136,14 @@ function GenerationPanel({ project: initialProject, scene: initialScene, prompt:
   const reviewNote=reviewDrafts.get(reviewDraftKey) ?? (sceneReview?.selectedAttemptId===selectedAttempt?.id?sceneReview?.note??'':'')
   const setReviewNote=(value:string)=>setReviewDrafts(previous=>new Map(previous).set(reviewDraftKey,value))
   const reviewableProducts = postPlan.filter(photo => attempts.some(attempt => attempt.sceneId === photo.id && attempt.state === 'ready-for-review'))
+  const bulkApprovals=postPlan.flatMap(photo=>{
+    const latest=attempts.find(a=>a.sceneId===photo.id),review=reviews.find(r=>r.sceneId===photo.id)
+    if(!latest||latest.state!=='ready-for-review'||attempts.some(a=>a.sceneId===photo.id&&['queued','paused','submission-uncertain'].includes(a.state)))return []
+    const chosen=review&&review.updatedAt>=latest.createdAt?attempts.find(a=>a.id===review.selectedAttemptId)??latest:latest
+    const logo=cleanup.logos.find(l=>l.attemptId===chosen.id)
+    if(!cleanup.ready(chosen)||logo?.phase==='failed'||review?.selectedAttemptId===chosen.id&&review.status==='approved'&&logo?.status==='approved')return []
+    return [{attemptId:chosen.id,note:reviewDrafts.get(`${photo.id}:${chosen.id}`)??(review?.selectedAttemptId===chosen.id?review.note:'')}]
+  })
   const reviewProductIndex = reviewableProducts.findIndex(photo => photo.id === sceneId)
   const editNote = reviewNote.trim()
   const editSelectedImage = project.outputType === 'post' && !!selectedAttempt && !!editNote && (sceneReview?.status === 'needs-changes' || editNote !== (sceneReview?.note ?? '').trim())
@@ -163,6 +174,12 @@ function GenerationPanel({ project: initialProject, scene: initialScene, prompt:
   }
   const setState = (id: string, state: 'paused' | 'queued' | 'submission-uncertain' | 'failed') => run(() => api!.generations.setState(id, state))
   const importResult = () => run(() => api!.generations.importResult(sceneActive!.id))
+  const retryGeneration=async(id:string)=>{
+    if(!flowApi||retryLocks.current.has(id))return
+    retryLocks.current.add(id);setRetrying(previous=>new Set(previous).add(id))
+    try{const value=await run(()=>flowApi.retry(id));if(value)setFlowJobs(previous=>[value,...previous.filter(job=>job.attemptId!==id)])}
+    finally{retryLocks.current.delete(id);setRetrying(previous=>{const next=new Set(previous);next.delete(id);return next})}
+  }
   const saveReview = (status: 'pending' | 'approved' | 'needs-changes') => selectedAttempt && run(async () => {
     const result=await api!.generations.review(project.id,selectedAttempt.sceneId,selectedAttempt.id,status,reviewNote)
     if(result.ok){setReviews(previous=>[...previous.filter(item=>item.sceneId!==result.value.sceneId),result.value]);setReviewDrafts(previous=>{if(previous.get(reviewDraftKey)!==reviewNote)return previous;const next=new Map(previous);next.delete(reviewDraftKey);return next})}
@@ -195,7 +212,7 @@ function GenerationPanel({ project: initialProject, scene: initialScene, prompt:
         setRequestError('The app did not confirm whether this request started. Refresh its saved status before retrying; do not submit twice.')
         throw cause
       }
-    }, 'Request accepted.').then(value => { if (value) setFlowJob(value); refresh() }).finally(() => {submitting.current=false;setRequestChecking(false);setChangingProducts(previous=>{const next=new Set(previous);next.delete(sceneId);return next})})
+    }, 'Request accepted.').then(value => { if (value) {setFlowJob(value);if(value.editQueued)setNotice('Image changes queued. Other products keep generating.')} refresh() }).finally(() => {submitting.current=false;setRequestChecking(false);setChangingProducts(previous=>{const next=new Set(previous);next.delete(sceneId);return next})})
   }
   const approveImage=()=>{
     if(!selectedAttempt)return
@@ -204,6 +221,19 @@ function GenerationPanel({ project: initialProject, scene: initialScene, prompt:
       if(result.ok){cleanup.merge([result.value.logo]);setReviews(previous=>[...previous.filter(r=>r.sceneId!==result.value.review.sceneId),result.value.review]);setReviewDrafts(previous=>{if(previous.get(reviewDraftKey)!==reviewNote)return previous;const next=new Map(previous);next.delete(reviewDraftKey);return next})}
       return result
     },'Image approved.')
+  }
+  const approveAll=async()=>{
+    if(approvingAll.current||!bulkApprovals.length)return
+    approvingAll.current=true
+    try{
+      const result=await run(()=>api!.generations.approveAll(project.id,bulkApprovals))
+      if(result){
+        cleanup.merge(result.logos)
+        setReviews(previous=>[...previous.filter(r=>!result.reviews.some(item=>item.sceneId===r.sceneId)),...result.reviews])
+        setReviewDrafts(previous=>{const next=new Map(previous);for(const review of result.reviews){const key=`${review.sceneId}:${review.selectedAttemptId}`;if(next.get(key)===review.note)next.delete(key)}return next})
+        setNotice(`${result.approved} image${result.approved===1?'':'s'} approved.${result.skipped?` ${result.skipped} changed or unfinished image${result.skipped===1?'':'s'} skipped.`:''}`)
+      }
+    }finally{approvingAll.current=false}
   }
   const repairLogo=async(id:string)=>{
     if(cleanup.logos.find(l=>l.attemptId===id)?.cleanup==='not-detected'){setMarkAttempt(id);return}
@@ -246,6 +276,7 @@ function GenerationPanel({ project: initialProject, scene: initialScene, prompt:
       <div className="generation-controls">
         {flowState!=='connected'&&<button className="button button-secondary" disabled={busy || automaticRunning} onClick={() => { window.location.hash = '#settings' }}>Connect Flow companion</button>}
         <button className="button button-secondary" onClick={() => void run(() => flowApi!.openResultsFolder(project.id))}>Open final project folder</button>
+        {project.outputType==='post'&&<button type="button" className="button button-secondary" disabled={busy||!bulkApprovals.length} onClick={()=>void approveAll()}>Approve all{bulkApprovals.length?` (${bulkApprovals.length})`:''}</button>}
         {project.outputType === 'reel' && <label>Results per generation<select aria-label="Results per generation" value={outputs} disabled={busy || !!active} onChange={event => setOutputs(Number(event.target.value))}>{[1, 2, 3, 4].map(value => <option value={value} key={value}>{value}</option>)}</select></label>}
         {project.outputType === 'post' && pendingPosts.length > 0 && <button className="button button-primary" disabled={busy || !!active || automaticRunning} onClick={()=>generate('posts')}>Generate {pendingPosts.length} {pendingPosts.length === postPlan.length ? 'product' : 'remaining'} image{pendingPosts.length === 1 ? '' : 's'}</button>}
         {project.outputType === 'reel' && <button className="button button-primary" disabled={busy||!!active||automaticRunning||!!preview.errors.length||preview.references.some(reference=>!reference.available)||!scene} onClick={()=>generate('single')}>{sceneAttempts.length?'Regenerate':'Generate scene'}</button>}
@@ -256,7 +287,7 @@ function GenerationPanel({ project: initialProject, scene: initialScene, prompt:
       {project.outputType === 'post' && collecting.length > 0 && !automaticRunning && <button className="button button-secondary" disabled={busy} onClick={() => void run(() => flowApi!.resumePosts(project.id), 'Collecting existing requests only; no new generation submitted.')}>Resume all pending results</button>}
       <details className="clip-prompt-details" onToggle={event=>setPromptPreviewOpen(event.currentTarget.open)}><summary>References and prompts</summary>{promptPreviewOpen&&(project.outputType==='post'&&pendingPosts.length?pendingPosts.map(item=>{const mapped=assemblePrompt(project,undefined,item.id);return <ReferencePromptPreview key={item.id} selected={mapped.selectedReference} images={project.snapshot.theme.images} prompt={mapped.text} productName={item.name}/>}):<ReferencePromptPreview selected={preview.selectedReference} images={project.snapshot.theme.images} prompt={preview.text} productName={selectedPost?.name}/>)}</details>
       <details className="clip-flow-details" open={!!requestError}><summary>Flow activity</summary><FlowActivityPanel job={selectedFlowJob} mapping={flowProject} checking={requestChecking} requestError={requestError} blocked={blockingRequest} projectId={project.id} connected={flowState === 'connected'} /></details>
-      {selectedFlowJob && <div className={`flow-job-status state-${selectedFlowJob.stage}`} role="status"><strong>{selectedFlowJob.stage.replaceAll('-', ' ')}</strong><p>{selectedFlowJob.message}</p>{selectedFlowJob.stage === 'needs-attention' && sceneActive?.state === 'submission-uncertain' && <button className="button button-primary" disabled={busy || automaticRunning} onClick={() => void run(() => flowApi!.resume(selectedFlowJob.attemptId), 'Checking the existing Flow job. No new generation submitted.')}>Resume result collection</button>}</div>}
+      {selectedFlowJob && <div className={`flow-job-status state-${selectedFlowJob.stage}`} role="status"><strong>{selectedFlowJob.stage.replaceAll('-', ' ')}</strong><p>{selectedFlowJob.message}</p>{selectedFlowJob.stage==='needs-attention'&&<button className="button button-primary" disabled={retrying.has(selectedFlowJob.attemptId)||selectedFlowJob.retryQueued} onClick={()=>void retryGeneration(selectedFlowJob.attemptId)}>{selectedFlowJob.retryQueued?'Retry queued':attempts.find(a=>a.id===selectedFlowJob.attemptId)?.state==='failed'?'Retry generation':'Check existing result'}</button>}</div>}
       
     </section>
     {project.outputType === 'post' && <div className="review-scene-strip post-photo-strip" aria-label="Product image review">{postPlan.map(item => {
@@ -264,10 +295,12 @@ function GenerationPanel({ project: initialProject, scene: initialScene, prompt:
       const latest=versions[0],chosen=review&&latest&&review.updatedAt>=latest.createdAt?versions.find(a=>a.id===review.selectedAttemptId)??latest:latest
       const logo=cleanup.logos.find(l=>l.attemptId===chosen?.id)
       const running=changingProducts.has(item.id)||attempts.some(a=>a.sceneId===item.id&&(['queued','paused','submission-uncertain'].includes(a.state)||cleanup.processing(a.id)))
-      const changes=running||logo?.phase==='failed'||logo?.status==='needs-changes'||review?.selectedAttemptId===chosen?.id&&review?.status==='needs-changes'
+      const latestAttempt=attempts.find(a=>a.sceneId===item.id)
+      const failedJob=flowJobs.find(job=>!job.abandoned&&job.stage==='needs-attention'&&job.attemptId===latestAttempt?.id)
+      const changes=running||!!failedJob||logo?.phase==='failed'||logo?.status==='needs-changes'||review?.selectedAttemptId===chosen?.id&&review?.status==='needs-changes'
       const approved=!changes&&review?.status==='approved'&&review.selectedAttemptId===chosen?.id&&logo?.status==='approved'&&cleanup.ready(chosen)
       const status=changes?'changing':approved?'approved':'pending',label=changes?'Changes in progress':approved?'Approved':'Awaiting review'
-      return <button type="button" key={item.id} className={`review-scene-card product-review-card status-${status} ${sceneId===item.id?'selected':''}`} aria-label={`Product ${item.index+1}, ${label}`} aria-pressed={sceneId===item.id} onClick={()=>selectProduct(item.id)}><strong>Product {item.index+1}</strong><span className="product-review-line" aria-hidden="true"/></button>
+      return <div key={item.id} className="product-review-item"><button type="button" className={`review-scene-card product-review-card status-${status} ${sceneId===item.id?'selected':''}`} aria-label={`Product ${item.index+1}, ${label}`} aria-pressed={sceneId===item.id} onClick={()=>selectProduct(item.id)}><strong>Product {item.index+1}</strong><span className="product-review-line" aria-hidden="true"/></button>{failedJob&&<button type="button" className="product-retry-button" aria-label={`Retry Product ${item.index+1}`} title={failedJob.retryQueued?'Retry queued':attempts.find(a=>a.id===failedJob.attemptId)?.state==='failed'?'Retry generation':'Check existing result'} disabled={retrying.has(failedJob.attemptId)||failedJob.retryQueued} onClick={()=>void retryGeneration(failedJob.attemptId)}><Icon name="refresh" size={15}/></button>}</div>
     })}</div>}
     {project.outputType === 'reel' && <div className="review-scene-strip" aria-label="Scene review strip">{project.storyboard.scenes.map((item, index) => { const count = attempts.filter(attempt => attempt.sceneId === item.id).length, state = reviews.find(review => review.sceneId === item.id)?.status ?? (count ? 'pending' : 'not-started'); return <button type="button" key={item.id} className={`review-scene-card ${selectedSceneId === item.id ? 'selected' : ''}`} aria-pressed={selectedSceneId === item.id} onClick={() => { setSelectedSceneId(item.id); setCorrectedPrompt(item.prompt) }}><span>Scene {index + 1}</span><strong>{item.name}</strong><small>{count} attempt{count === 1 ? '' : 's'} · {state.replaceAll('-', ' ')}</small></button> })}</div>}
     {project.outputType === 'reel' && <label className="generation-scene-select">Scene to prepare<select value={selectedSceneId} onChange={event => { const next = project.storyboard.scenes.find(item => item.id === event.target.value); setSelectedSceneId(event.target.value); setCorrectedPrompt(next?.prompt ?? '') }}>{project.storyboard.scenes.map((item, index) => <option key={item.id} value={item.id}>Scene {index + 1}: {item.name} · source {item.sourceDuration}s</option>)}</select></label>}
@@ -286,7 +319,7 @@ function GenerationPanel({ project: initialProject, scene: initialScene, prompt:
       {project.outputType === 'reel' && <button type="button" className="button button-secondary button-small" onClick={extractFrame}>Extract paused frame as PNG</button>}
       <div className="review-actions clip-review-actions"><label className="clip-description">Description<textarea aria-label="Review notes" maxLength={2000} placeholder="Describe the changes you want" value={reviewNote} onChange={event=>setReviewNote(event.target.value)}/></label><div className="clip-review-buttons">{project.outputType==='post'?<>
         <button type="button" className="button button-primary" disabled={busy||!!sceneActive} onClick={approveImage}>Approve</button>
-        <button type="button" className="button button-secondary" disabled={busy||!!active||automaticRunning||!editNote} onClick={()=>generate('changes')}>Change image</button>
+        <button type="button" className="button button-secondary" disabled={busy||!!sceneActive||!editNote} onClick={()=>generate('changes')}>{selectedFlowJob?.editQueued?'Changes queued':'Change image'}</button>
         <button type="button" className="button button-secondary" disabled={busy||!!sceneActive} onClick={()=>void repairLogo(selectedAttempt.id)}>Need change in logo</button>
       </>:<><button type="button" className="button button-primary" disabled={busy} onClick={()=>void saveReview('approved')}>Approve selected attempt</button><button type="button" className="button button-secondary" disabled={busy} onClick={()=>void saveReview('needs-changes')}>Needs changes</button></>}</div></div>
       {project.outputType==='reel'&&sceneReview?.selectedAttemptId === selectedAttempt.id && <span className={`generation-state state-${sceneReview.status}`}>{sceneReview.status.replaceAll('-', ' ')}</span>}
@@ -427,10 +460,11 @@ function ProjectEditor({ id, onDirty, onBusy }: { id?: string } & Guards) {
   useEffect(() => { onBusy(busy || productBusy); return () => onBusy(false) }, [busy, productBusy, onBusy])
   useEffect(() => { let active = true; if (!api) { setLoading(false); return }
     setLoading(true); setError('')
-    void Promise.all([api.products.list(), api.products.trash(), api.themes.list(), api.characters.list(), id ? api.projects.get(id) : Promise.resolve(null)]).then(([p, trash, t, c, project]) => {
+    void Promise.all([api.products.list(), api.products.trash(), api.themes.list(), api.characters.list(), id ? api.projects.get(id) : Promise.resolve(null), id ? api.generations.list(id) : Promise.resolve(null)]).then(([p, trash, t, c, project, generations]) => {
       if (!active) return
       setProducts(unwrap(p).items); setProductTrash(unwrap(trash)); setThemes(unwrap(t)); setCharacters(unwrap(c))
       if (project) { const value = unwrap(project), draft = draftOf(value); setSaved(value); setForm(draft); baseline.current = JSON.stringify(draft) }
+      if(generations?.ok&&generations.value.length)setStep('Clips')
     }).catch(cause => { if (active) setError(message(cause)) }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [api, id, retry])

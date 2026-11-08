@@ -14,8 +14,11 @@ export class FlowState {
     }
     for (const row of this.db.prepare('SELECT content FROM flow_jobs').all() as { content: string }[]) {
       const job = JSON.parse(row.content) as FlowJob
-      if (['complete', 'needs-attention'].includes(job.stage)) continue
       const attempt = this.db.prepare('SELECT state FROM generation_attempts WHERE id = ?').get(job.attemptId) as { state: string }
+      if(job.editQueued&&attempt.state==='queued'&&!job.submittedAt&&!job.submissionAcknowledged){this.saveJob({...job,stage:'preparing',message:'Image changes queued. They resume in this project when Chrome is connected.'});continue}
+      if(job.retryQueued){if(attempt.state==='queued')this.db.prepare("UPDATE generation_attempts SET state='failed' WHERE id=?").run(job.attemptId);this.saveJob({...job,retryQueued:false,stage:'needs-attention',message:'The queued retry was interrupted. Click Retry generation to upload this product again.'});continue}
+      if(attempt.state==='queued'&&job.stage==='needs-attention'&&!job.submittedAt&&!job.submissionAcknowledged)this.db.prepare("UPDATE generation_attempts SET state='failed' WHERE id=?").run(job.attemptId)
+      if (['complete', 'needs-attention'].includes(job.stage)) continue
       if (attempt.state === 'ready-for-review') this.saveJob({ ...job, stage: 'complete', message: 'Downloaded results recovered after restart.' })
       else {
         if (attempt.state === 'queued') this.db.prepare("UPDATE generation_attempts SET state = 'failed' WHERE id = ?").run(job.attemptId)
@@ -62,6 +65,7 @@ export class FlowState {
   pendingCollection(): FlowJob[] {
     return (this.db.prepare("SELECT j.content FROM flow_jobs j JOIN generation_attempts a ON a.id=j.attempt_id JOIN projects p ON p.id=j.project_id WHERE a.state='submission-uncertain' AND p.trashed_at IS NULL ORDER BY j.rowid").all() as { content: string }[]).map(row => JSON.parse(row.content) as FlowJob).filter(job => !!job.projectUrl && !job.abandoned && !job.collectionStopped)
   }
+  queuedEdits():FlowJob[]{return (this.db.prepare("SELECT j.content FROM flow_jobs j JOIN generation_attempts a ON a.id=j.attempt_id JOIN projects p ON p.id=j.project_id WHERE a.state='queued' AND p.trashed_at IS NULL ORDER BY j.rowid").all() as {content:string}[]).map(row=>JSON.parse(row.content) as FlowJob).filter(job=>job.editQueued&&!job.abandoned)}
   saveJob(value: FlowJob): FlowJob {
     this.valid(value.attemptId); this.valid(value.projectId)
     const attempt = this.db.prepare('SELECT project_id FROM generation_attempts WHERE id=?').get(value.attemptId) as { project_id: string } | undefined

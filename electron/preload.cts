@@ -4,6 +4,24 @@ import type { ExportProgress, FrameStudioAPI,LogoReview } from './contracts.cjs'
 // Type-only imports are erased: sandboxed preload never requires local modules.
 const bridge: FrameStudioAPI = {
   platform: 'windows', phase: 11,
+  discovery: {
+    status: () => ipcRenderer.invoke('discovery:status'),
+    save: value => ipcRenderer.invoke('discovery:save', value),
+    start: id => ipcRenderer.invoke('discovery:start', id),
+    cancel: () => ipcRenderer.invoke('discovery:cancel'),
+    download: (id, url) => ipcRenderer.invoke('discovery:download', id, url),
+    markPosted: (id, url) => ipcRenderer.invoke('discovery:posted', id, url),
+    copy: (id, url) => ipcRenderer.invoke('discovery:copy', id, url),
+  },
+  productFind: {
+    start: query => ipcRenderer.invoke('product-find:start', query),
+    cancel: () => ipcRenderer.invoke('product-find:cancel'),
+    status: () => ipcRenderer.invoke('product-find:status'),
+    stopAutoRefresh: () => ipcRenderer.invoke('product-find:stop-auto-refresh'),
+    openFolder: () => ipcRenderer.invoke('product-find:open-folder'),
+    openProduct: url => ipcRenderer.invoke('product-find:open-product', url),
+    copyProduct: url => ipcRenderer.invoke('product-find:copy-product', url),
+  },
   flow: {
     activeRequest: id => id ? ipcRenderer.invoke('flow:active-request', id) : ipcRenderer.invoke('flow:active-request'),
     status: () => ipcRenderer.invoke('flow:status'),
@@ -20,6 +38,7 @@ const bridge: FrameStudioAPI = {
     generate: (id, sceneId, outputs) => ipcRenderer.invoke('flow:generate', id, sceneId, outputs),
     generatePosts: id => ipcRenderer.invoke('flow:generate-posts', id),
     resume: id => ipcRenderer.invoke('flow:resume', id),
+    retry: id => ipcRenderer.invoke('flow:retry',id),
     resumePosts: id => ipcRenderer.invoke('flow:resume-posts', id),
     pairCompanion: () => ipcRenderer.invoke('flow:pair-companion'),
     copyPairingCode: () => ipcRenderer.invoke('flow:copy-pairing-code'),
@@ -46,6 +65,7 @@ const bridge: FrameStudioAPI = {
     reviewLogo: (id,status) => ipcRenderer.invoke('generations:review-logo', id,status),
     retryLogo: (id,area) => area ? ipcRenderer.invoke('generations:retry-logo', id,area) : ipcRenderer.invoke('generations:retry-logo', id),
     approvePost: (id,note) => ipcRenderer.invoke('generations:approve-post',id,note),
+    approveAll: (id,items) => ipcRenderer.invoke('generations:approve-all',id,items),
     onLogoProgress: callback=>{const listener=(_event:unknown,value:LogoReview)=>callback(value);ipcRenderer.on('generations:logo-progress',listener);return()=>ipcRenderer.removeListener('generations:logo-progress',listener)},
   },
   exports: {

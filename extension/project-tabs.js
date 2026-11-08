@@ -1,5 +1,9 @@
 const projectIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const pause = () => new Promise(resolve => setTimeout(resolve, 100))
+export async function retryTabEdit(action){
+  const deadline=Date.now()+15000
+  for(;;){try{return await action()}catch(error){if(!/Tabs cannot be edited right now/i.test(error?.message||'')||Date.now()>=deadline)throw error;await new Promise(resolve=>setTimeout(resolve,250))}}
+}
 export function sameProject(first, second) {
   try { const a=new URL(first),b=new URL(second);return a.origin===b.origin && a.pathname.replace(/\/$/,'')===b.pathname.replace(/\/$/,'') && /\/project\/[a-zA-Z0-9_-]+$/.test(a.pathname.replace(/\/$/,'')) } catch { return false }
 }
@@ -17,7 +21,10 @@ export class ProjectTabs {
     })()
     await this.loading
   }
-  async save() { await this.api.storage.session.set({frameProjectTabs:Object.fromEntries(this.records)}) }
+  async save() {
+    this.saving=(this.saving ?? Promise.resolve()).catch(()=>{}).then(()=>this.api.storage.session.set({frameProjectTabs:Object.fromEntries(this.records)}))
+    await this.saving
+  }
   owned(url, projectId) { return [...this.records].some(([id,record])=>id!==projectId && record.url && sameProject(record.url,url)) }
   async verify(context, expected) {
     const tab=await this.api.tabs.get(context.tabId)
@@ -58,7 +65,7 @@ export class ProjectTabs {
       const target=creating?home:record.url
       // Persist creation intent before any remote create click. A closed tab can
       // reopen a known URL, but never retries an uncertain New project action.
-      tab=await this.api.tabs.create({url:target,active:false,...(Number.isInteger(windowId)?{windowId}:{})})
+      tab=await retryTabEdit(()=>this.api.tabs.create({url:target,active:false,...(Number.isInteger(windowId)?{windowId}:{})}))
       record.tabId=tab.id;await this.save();await this.ready(tab.id,target)
     }
     return {...record,projectId}

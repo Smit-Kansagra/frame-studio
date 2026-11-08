@@ -23,11 +23,12 @@ for(let i=0;i<3;i++) {
   projects.push(project);sources.set(project.id,path.join(root,`${i}-0.png`))
 }
 const submitted=[],remote=new Map(),prepared=new Map(),events=[]
-let inBrowser=false,maxSubmitted=0,stall=false,uncertainProject='',deleteDuringPrepare=''
+const inBrowser=new Set()
+let maxSubmitted=0,stall=false,uncertainProject='',deleteDuringPrepare=''
 const op=async(projectId,action,fn)=>{
-  assert.equal(inBrowser,false,'Chrome actions and native submit may never overlap')
-  inBrowser=true;events.push({projectId,action})
-  try{await pause(1);return await fn()}finally{inBrowser=false}
+  assert.equal(inBrowser.has(projectId),false,'Commands within one project must never overlap')
+  inBrowser.add(projectId);events.push({projectId,action})
+  try{await pause(1);return await fn()}finally{inBrowser.delete(projectId)}
 }
 const factory=projectId=>{
   const url=`https://flow.google.com/project/${projectId}`
@@ -50,7 +51,6 @@ const factory=projectId=>{
       const request=prepared.get(projectId),id=`result-${randomUUID()}`
       remote.set(id,{projectId,url,prompt:request.prompt,readyAt:Date.now()+30});submitted.push({projectId,id})
       maxSubmitted=Math.max(maxSubmitted,ws.generations.submittedCount())
-      assert.ok(ws.generations.submittedCount()<=3,'Shared capacity covers every project, not 3 per project')
       if(uncertainProject===projectId)throw new StorageError('INVALID_REQUEST','Fixture lost acknowledgement')
     }),
     results:(actual,prompt,_kind,baseline)=>op(projectId,'results',async()=>{
@@ -68,7 +68,7 @@ try{
   await Promise.all(projects.map(p=>scheduler.startPosts(p.id)))
   await assert.rejects(()=>scheduler.startPosts(projects[0].id),/active/)
   await settle()
-  assert.equal(submitted.length,6);assert.equal(maxSubmitted,3)
+  assert.equal(submitted.length,6);assert.ok(maxSubmitted>=3)
   const firstDownload=events.findIndex(e=>e.action==='download')
   assert.equal(new Set(events.slice(0,firstDownload).filter(e=>e.action==='submit').map(e=>e.projectId)).size,3,'All three projects can generate before the first result is imported')
   const resultFolders=[]
@@ -122,5 +122,5 @@ try{
   assert.equal(submitted.filter(x=>x.projectId===projects[1].id).length,countB+1)
   assert.equal(ws.flow.latest(projects[1].id).stage,'complete')
   assert.ok((await readFile(await ws.attemptFile(secondJob.attemptId))).length)
-  console.log('PASS 3 same-name projects: separate photos/prompts/results/folders, overlapping remote work, serialized browser commands and native submit, shared max 3, duplicate start/URL/result ownership rejection, uncertainty isolation, restart collection without resubmit, Post/Reel separation, delete A leaves B running.')
+  console.log('PASS 3 same-name projects: separate photos/prompts/results/folders, overlapping remote work, concurrent project browser lanes and serialized native submit, no global project cap, duplicate start/URL/result ownership rejection, uncertainty isolation, restart collection without resubmit, Post/Reel separation, delete A leaves B running.')
 }finally{await scheduler.close();await ws.close()}

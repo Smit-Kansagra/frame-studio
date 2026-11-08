@@ -38,7 +38,7 @@ function rejectedSocket(code, givenOrigin, token) {
     ws.on('close', () => { clearTimeout(timer); resolve() })
   })
 }
-let client, submitCount = 0, badDownload = false, loseDownloadReply = false, downloadCount = 0, wrongScope = false, onAttach, observed
+let client, submitCount = 0, badDownload = false, loseDownloadReply = false, downloadCount = 0, wrongScope = false, onAttach, observed,recoveredDownload=false,prepareErrors=0,prepareCalls=0
 try {
   assert.throws(() => bridge.pairingCode(), /expired or was already used/)
   const [pairing, concurrentPairing] = await Promise.all([bridge.pair(), bridge.pair()])
@@ -55,8 +55,9 @@ try {
     if (command.type === 'ping') { client.send(JSON.stringify({ type: 'pong' })); return }
     if (command.type !== 'command') return
     observed?.push(command.action)
+    if(command.action==='prepare'){prepareCalls++;if(prepareErrors-->0){client.send(JSON.stringify({type:'reply',id:command.id,projectId:command.projectId,ok:false,error:'Flow did not confirm the scoped editor action.'}));return}}
     let value = null
-    if (command.action === 'inspect') value = { url: flowUrl, title: 'Fixture workspace', ready: true, companionVersion:'0.1.6', adapterVersion:'0.1.6-fast.22' }
+    if (command.action === 'inspect') value = { url: flowUrl, title: 'Fixture workspace', ready: true, companionVersion:'0.1.6', adapterVersion:'0.1.6-fast.24' }
     if (command.action === 'createProject') value = { url: flowUrl }
     if (command.action === 'nameProject') value = { name: command.payload.name }
     if (command.action === 'attach') { assert.equal(command.payload.file.base64, png.toString('base64')); if(onAttach){const callback=onAttach;onAttach=undefined;callback();await new Promise(resolve=>setTimeout(resolve,10))} }
@@ -66,9 +67,10 @@ try {
     if (command.action === 'confirmSubmit') value = {accepted:true,evidence:'prompt-cleared'}
     if (command.action === 'download') {
       downloadCount++
-      const filename = badDownload ? photo : path.join(downloads, 'Frame Studio', `${command.payload.nonce}.png`)
+      const filename = badDownload ? photo : recoveredDownload?path.join(downloads,`Fashion_post_flat_lay_and_${command.payload.result.id.slice(0,8)} (5).png`):path.join(downloads, 'Frame Studio', `${command.payload.nonce}.png`)
       if (!badDownload) await writeFile(filename, png)
       value = { filename }
+      if(recoveredDownload)value={filename,originalMediaId:command.payload.result.id,originalTitle:'Fashion post flat lay and outfit'}
       if (loseDownloadReply) { loseDownloadReply=false;client.send(JSON.stringify({type:'reply',id:command.id,ok:false,error:'Download acknowledgement was lost.'}));return }
     }
     const projectId=wrongScope?'22222222-2222-4222-8222-222222222222':command.projectId;wrongScope=false
@@ -97,6 +99,12 @@ try {
   await collecting
   assert.deepEqual(observed,['prepare','attach','results','attach','attach','baseline'],'Actual companion transport lets ready-result collection run before the next reference upload')
   observed=undefined
+  prepareErrors=2;const callsBefore=prepareCalls
+  await bridge.prepare(flowUrl,{prompt:'Background editor retry',outputType:'post',preset:'post-square',outputs:1,files:[]})
+  assert.equal(prepareCalls,callsBefore+3,'Transient preparation errors retry before any native click')
+  prepareErrors=5;const boundedBefore=prepareCalls
+  await assert.rejects(()=>bridge.prepare(flowUrl,{prompt:'Still unavailable',outputType:'post',preset:'post-square',outputs:1,files:[]}),/scoped editor/)
+  assert.equal(prepareCalls,boundedBefore+3,'Preparation retries remain bounded');prepareErrors=0
   await assert.rejects(() => bridge.nameProject(flowUrl, ''), /Invalid Flow project name/)
   assert.deepEqual(await bridge.prepare(flowUrl, { prompt: 'Product fixture', outputType: 'post', preset: 'post-square', sourceDuration: null, outputs: 1, files: [photo] }), ['old-asset'])
   await bridge.submit(flowUrl); assert.equal(submitCount, 1)
@@ -110,6 +118,10 @@ try {
   await assert.rejects(()=>bridge.download(flowUrl,recovering,root),/acknowledgement was lost/)
   assert.ok(await bridge.download(flowUrl,recovering,root))
   assert.equal(downloadCount,beforeLost+1,'A lost reply reuses its completed Chrome staging file, with no duplicate download')
+  recoveredDownload=true
+  const recoveredResult={id:'9345c2df-aaf3-4689-bc87-1aeea46ea144',selector:'#existing'}
+  const original=await bridge.download(flowUrl,recoveredResult,root)
+  assert.ok(original.includes('flow-original-'));assert.equal((await sharp(original).metadata()).format,'png');recoveredDownload=false
   badDownload = true
   await assert.rejects(() => bridge.download(flowUrl, {...results[0],id:'different-result'}, root), /outside the expected/)
   await assert.rejects(() => bridge.prepare('https://evil.example/project/id', { files: [] }), /Invalid Flow project/)

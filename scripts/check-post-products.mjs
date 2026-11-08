@@ -93,8 +93,8 @@ try {
   await runner.startPosts(second.id); await settle(runner)
   assert.notEqual(ws.flow.project(second.id).url, ws.flow.project(project.id).url, 'Different local projects use different Flow projects')
   assert.equal(names.get(ws.flow.project(second.id).url), second.name)
-  assert.equal(submissions.length, 7, 'Queue stops before submitting a failed preparation or a later product')
-  assert.equal(ws.flow.latest(second.id).stage, 'needs-attention')
+  assert.equal(submissions.length, 10, 'Failed preparation does not submit, while the other four products continue')
+  assert.ok(ws.flow.jobs(second.id).some(job=>job.stage==='needs-attention'&&ws.generations.get(job.attemptId).state==='failed'))
   failOn = ''; interruptDownload = true
   await runner.startPosts(second.id); await settle(runner)
   assert.equal(submissions.length, 11, 'A temporary download failure retries automatically and remaining products continue')
@@ -113,5 +113,5 @@ try {
   assert.equal((await ws.generations.list(second.id)).filter(item => item.state === 'ready-for-review').length, 5)
   assert.ok((await readFile(exported.path)).length > 16)
   await assert.rejects(() => ws.generations.prepare(project.id, assets[8].id), /Choose a product photo/)
-  console.log('PASS 5 products / 3 references: balanced cycling, isolated attachments, overlapping accepted requests, independent approvals, single-product regeneration, selected export, stop on failure, restart recovery and remaining-only continuation. No live Flow generation.')
+  console.log('PASS 5 products / 3 references: balanced cycling, isolated attachments, overlapping accepted requests, independent approvals, single-product regeneration, selected export, failed-product isolation, restart recovery and remaining-only continuation. No live Flow generation.')
 } finally { await ws.close() }

@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react'
 
-export type IconName = 'studio' | 'product' | 'theme' | 'character' | 'settings' | 'plus' | 'arrow' | 'folder' | 'image' | 'film' | 'check' | 'lock' | 'link' | 'monitor' | 'wifi-off' | 'chevron' | 'crop' | 'spark' | 'moon' | 'sun'
+export type IconName = 'studio' | 'product' | 'theme' | 'character' | 'settings' | 'plus' | 'arrow' | 'folder' | 'image' | 'film' | 'check' | 'lock' | 'link' | 'monitor' | 'wifi-off' | 'chevron' | 'crop' | 'spark' | 'moon' | 'sun' | 'refresh'
 
 const paths: Record<IconName, React.ReactNode> = {
   studio: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>,
@@ -10,6 +10,7 @@ const paths: Record<IconName, React.ReactNode> = {
   settings: <><path d="m9 3-.6 2.2-2 .9L4.3 5.5 2 9.5l1.6 1.6v2L2 14.5l2.3 4 2.1-.6 2 .9L9 21h6l.6-2.2 2-.9 2.1.6 2.3-4-1.6-1.4v-2L22 9.5l-2.3-4-2.1.6-2-.9L15 3H9Z" /><circle cx="12" cy="12" r="3" /></>,
   plus: <path d="M12 5v14M5 12h14" />,
   arrow: <path d="M4 12h15m-6-6 6 6-6 6" />,
+  refresh: <><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-2l2 3M4 16l2 3a7 7 0 0 0 12-2"/></>,
   folder: <path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />,
   image: <><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="8" cy="8" r="1.5" /><path d="m3 17 5-5 4 4 4-6 5 7" /></>,
   film: <><rect x="3" y="3" width="18" height="18" rx="3" /><path d="M7 3v18M17 3v18M3 8h4m-4 8h4M17 8h4m-4 8h4" /></>,

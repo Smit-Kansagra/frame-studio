@@ -1,3 +1,5 @@
+import { registerDiscovery } from './product-discovery.cjs'
+import { isProductFindImage } from './product-find.cjs'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, protocol, session, shell } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import path from 'node:path'
@@ -114,12 +116,12 @@ function registerFlowBridge() {
     if (!net.isOnline() && channel !== 'flow:disconnect') return currentFlowStatus()
     return action()
   })
-  for (const channel of ['flow:project', 'flow:job', 'flow:jobs', 'flow:resume', 'flow:resume-posts'] as const) ipcMain.handle(channel, async (event, ...args: unknown[]) => {
+  for (const channel of ['flow:project', 'flow:job', 'flow:jobs', 'flow:resume', 'flow:resume-posts','flow:retry'] as const) ipcMain.handle(channel, async (event, ...args: unknown[]) => {
     if (!authorized(event) || args.length !== 1 || typeof args[0] !== 'string' || !UUID_PATTERN.test(args[0])) return { ok: false, error: { code: 'INVALID_REQUEST', message: 'Invalid Flow project request.' } }
     try {
-      if (['flow:resume','flow:resume-posts'].includes(channel) && currentFlowStatus().state !== 'connected') return { ok: false, error: { code: 'INVALID_REQUEST', message: 'Pair and recheck your normal Chrome Flow tab in Settings first.' } }
+      if (['flow:resume','flow:resume-posts','flow:retry'].includes(channel) && currentFlowStatus().state !== 'connected') return { ok: false, error: { code: 'INVALID_REQUEST', message: 'Pair and recheck your normal Chrome Flow tab in Settings first.' } }
       const ws = await workspace.automationWorkspace(), id = args[0]
-      const value = channel === 'flow:project' ? ws.flow.project(id) : channel === 'flow:job' ? ws.flow.latest(id) : channel === 'flow:jobs' ? ws.flow.jobs(id) : channel === 'flow:resume-posts' ? await flowCoordinator.resumePosts(id) : await flowCoordinator.resume(id)
+      const value = channel === 'flow:project' ? ws.flow.project(id) : channel === 'flow:job' ? ws.flow.latest(id) : channel === 'flow:jobs' ? ws.flow.jobs(id) : channel === 'flow:resume-posts' ? await flowCoordinator.resumePosts(id) : channel==='flow:retry'?await flowCoordinator.retry(id):await flowCoordinator.resume(id)
       return { ok: true, value }
     } catch (error) { return failure(error) }
   })
@@ -344,6 +346,11 @@ function registerBridge() {
     if(args.length!==2||typeof args[0]!=='string'||!UUID_PATTERN.test(args[0])||typeof args[1]!=='string'||args[1].length>2000||args[1].includes('\0'))return invalid
     return workspace.generationOperation(generations=>generations.approvePost(args[0] as string,args[1] as string))
   })
+  ipcMain.handle('generations:approve-all',(event,...args:unknown[])=>{
+    if(!authorized(event))return denied
+    if(args.length!==2||typeof args[0]!=='string'||!UUID_PATTERN.test(args[0])||!Array.isArray(args[1])||!args[1].length||args[1].length>10000)return invalid
+    return workspace.generationOperation(generations=>generations.approveAll(args[0] as string,args[1] as {attemptId:string;note:string}[]))
+  })
   ipcMain.handle('generations:review-logo', (event,...args:unknown[]) => {
     if(!authorized(event))return denied
     if(args.length!==2||typeof args[0]!=='string'||!UUID_PATTERN.test(args[0])||!['approved','needs-changes'].includes(args[1] as string))return invalid
@@ -487,7 +494,8 @@ if (primaryInstance) void app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
   session.defaultSession.setPermissionCheckHandler(() => false)
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
-    callback({ cancel: !devUrl || !details.url.startsWith(`${devUrl}/`) })
+    const productImage = details.resourceType === 'image' && details.webContentsId === mainWindow?.webContents.id && isProductFindImage(details.url)
+    callback({ cancel: !productImage && (!devUrl || !details.url.startsWith(`${devUrl}/`)) })
   })
   workspace = new WorkspaceManager(path.join(app.getPath('userData'), 'workspace'))
   void workspace.automationWorkspace().then(ws=>ws.generations.onLogoProgress(value=>mainWindow?.webContents.send('generations:logo-progress',value))).catch(()=>{})
@@ -501,6 +509,7 @@ if (primaryInstance) void app.whenReady().then(() => {
   collectionTimer.unref()
   registerBridge()
   registerFlowBridge()
+  registerDiscovery(path.join(app.getPath('userData'), 'product-discovery'), authorized)
 
   protocol.handle('frame-media', async request => {
     const url = new URL(request.url)

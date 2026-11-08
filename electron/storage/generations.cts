@@ -71,7 +71,7 @@ export class Generations {
     if(a.outputType!=='post'||!['approved','needs-changes'].includes(status)||this.cleaning.has(id)||previous.status==='processing'||status==='approved'&&previous.phase==='failed')invalid('Wait for logo cleanup to finish before reviewing this Post image.')
     return this.saveLogo({...this.logoInfo(a),status,message:status==='approved'?'Logo result approved for this exact image version.':'Logo result needs changes. Retry logo cleanup locally, then inspect and approve.'})
   }
-  async approvePost(id:string,note:string):Promise<{review:SceneReview;logo:LogoReview}>{
+  async approvePost(id:string,note:string,currentOnly=false):Promise<{review:SceneReview;logo:LogoReview}>{
     if(typeof note!=='string'||note.length>2000||note.includes('\0'))invalid('Keep the description to 2,000 characters or fewer.')
     const attempt=this.get(id)
     await this.project(attempt.projectId);await this.resultFile(id)
@@ -79,6 +79,12 @@ export class Generations {
     if(current.outputType!=='post'||current.state!=='ready-for-review'||this.cleaning.has(id)||logo.status==='processing'||logo.phase==='failed'||logo.cleanup==='not-checked'||!logo.checkedAt)invalid('Wait for local cleanup to finish before approving this image.')
     const active=this.db.prepare("SELECT id FROM generation_attempts WHERE project_id=? AND scene_id=? AND state IN ('queued','paused','submission-uncertain') LIMIT 1").get(current.projectId,current.sceneId)
     if(active)invalid('Wait for this product’s current request to finish before approving it.')
+    if(currentOnly){
+      const latest=this.db.prepare('SELECT * FROM generation_attempts WHERE project_id=? AND scene_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1').get(current.projectId,current.sceneId) as Row|undefined
+      const reviewed=this.db.prepare('SELECT selected_attempt_id,updated_at FROM scene_reviews WHERE project_id=? AND scene_id=?').get(current.projectId,current.sceneId) as {selected_attempt_id:string;updated_at:string}|undefined
+      const selected=latest&&reviewed&&reviewed.updated_at>=latest.created_at?reviewed.selected_attempt_id:latest?.id
+      if(latest?.state!=='ready-for-review'||selected!==id)invalid('This product’s current image changed. Review its latest image before approval.')
+    }
     const review:SceneReview={projectId:current.projectId,sceneId:current.sceneId,selectedAttemptId:id,status:'approved',note:note.trim(),updatedAt:new Date().toISOString()}
     let saved!:LogoReview
     transaction(this.db,()=>{
@@ -86,6 +92,23 @@ export class Generations {
       saved=this.saveLogo({...logo,status:'approved',message:'Image approved for export.'})
     })
     return {review,logo:saved}
+  }
+  async approveAll(projectId:string,items:{attemptId:string;note:string}[]):Promise<{approved:number;skipped:number;reviews:SceneReview[];logos:LogoReview[]}>{
+    const project=await this.project(projectId)
+    if(project.outputType!=='post'||!Array.isArray(items)||!items.length||items.length>10000)invalid('Choose completed Post images from this project.')
+    const seen=new Set<string>()
+    for(const item of items){
+      if(!item||!UUID_PATTERN.test(item.attemptId)||typeof item.note!=='string'||item.note.length>2000||item.note.includes('\0'))invalid('Invalid image approval.')
+      const attempt=this.get(item.attemptId)
+      if(attempt.projectId!==projectId||seen.has(attempt.sceneId))invalid('Each approval must belong to a different product in this project.')
+      seen.add(attempt.sceneId)
+    }
+    const result={approved:0,skipped:0,reviews:[] as SceneReview[],logos:[] as LogoReview[]}
+    for(const item of items){
+      try{const value=await this.approvePost(item.attemptId,item.note,true);result.approved++;result.reviews.push(value.review);result.logos.push(value.logo)}
+      catch(error){if(error instanceof StorageError&&error.code==='INVALID_REQUEST')result.skipped++;else throw error}
+    }
+    return result
   }
   async retryLogo(id: string, area?:LogoRepairArea): Promise<LogoReview> {
     if(area!==undefined)try{area=validateRepairArea(area)}catch(error){invalid(error instanceof Error?error.message:'Invalid logo selection.')}
@@ -176,7 +199,7 @@ export class Generations {
   async list(projectId: string): Promise<GenerationAttempt[]> {
     if (!UUID_PATTERN.test(projectId)) invalid('The project identifier is invalid.')
     await this.project(projectId)
-    return (this.db.prepare('SELECT * FROM generation_attempts WHERE project_id = ? ORDER BY created_at DESC').all(projectId) as Row[]).map(fromRow)
+    return (this.db.prepare('SELECT * FROM generation_attempts WHERE project_id = ? ORDER BY created_at DESC,rowid DESC').all(projectId) as Row[]).map(fromRow)
   }
   async prepare(projectId: string, sceneId: string): Promise<GenerationAttempt> {
     return this.prepareRequest(projectId, sceneId)
@@ -187,17 +210,42 @@ export class Generations {
     return this.prepareRequest(projectId, sceneId, batchId, parallel)
   }
   async prepareAutomatic(projectId: string, sceneId: string): Promise<GenerationAttempt> { return this.prepareRequest(projectId, sceneId, undefined, true) }
-  private checkActive(projectId: string, sceneId: string, batchId?: string, parallel = false) {
-    const rows = this.db.prepare(`SELECT a.project_id, a.scene_id, a.state, a.automation_scope, j.content FROM generation_attempts a LEFT JOIN flow_jobs j ON j.attempt_id = a.id WHERE a.state IN (${activeStates.map(() => '?').join(',')})`).all(...activeStates) as {project_id:string; scene_id:string; state:string; automation_scope: string | null; content:string | null}[]
+  // Capture this exact review's prompt, source image and references immediately.
+  // The coordinator activates this durable queue entry before touching Chrome.
+  async prepareDeferredRevision(projectId:string,sceneId:string):Promise<GenerationAttempt>{return this.prepareRequest(projectId,sceneId,undefined,true,true)}
+  async activateRevision(id:string,batchId?:string):Promise<GenerationAttempt>{
+    const attempt=this.get(id);await this.project(attempt.projectId)
+    const job=this.db.prepare('SELECT content FROM flow_jobs WHERE attempt_id=?').get(id) as {content:string}|undefined
+    if(attempt.state!=='queued'||!attempt.revision||!job||!JSON.parse(job.content).editQueued)invalid('This image change is no longer queued.')
+    this.checkActive(attempt.projectId,attempt.sceneId,batchId,true,false,id)
+    return attempt
+  }
+  // Trusted coordinator only. Retain the failed request's exact prompt/references;
+  // a request that may already be accepted must use result collection instead.
+  async retryPreparation(id:string,batchId?:string,parallel=false):Promise<GenerationAttempt>{
+    const original=this.get(id);await this.project(original.projectId)
+    transaction(this.db,()=>{
+      const current=this.get(id),row=this.db.prepare('SELECT content FROM flow_jobs WHERE attempt_id=?').get(id) as {content:string}|undefined,job=row?JSON.parse(row.content) as FlowJob:undefined
+      if(current.state!=='failed'||!job||job.abandoned||job.resultIds.length||job.submissionAcknowledged&&!job.generationFailed||job.submittedAt&&!job.submissionRejected&&!job.generationFailed)invalid('This request may already be submitted. Check its existing result instead of uploading again.')
+      this.checkActive(current.projectId,current.sceneId,batchId??job.postBatch?.id,parallel)
+      this.db.prepare("UPDATE generation_attempts SET state='queued',error=NULL,automation_scope=?,updated_at=? WHERE id=?").run(parallel?current.projectId:null,new Date().toISOString(),id)
+    })
+    return this.get(id)
+  }
+  private checkActive(projectId: string, sceneId: string, batchId?: string, parallel = false, deferred=false, ignoreId?:string) {
+    const rows = this.db.prepare(`SELECT a.id, a.project_id, a.scene_id, a.state, a.automation_scope, j.content FROM generation_attempts a LEFT JOIN flow_jobs j ON j.attempt_id = a.id WHERE a.state IN (${activeStates.map(() => '?').join(',')})`).all(...activeStates) as {id:string;project_id:string; scene_id:string; state:string; automation_scope: string | null; content:string | null}[]
     for (const row of rows) {
+      if(row.id===ignoreId)continue
       if (parallel && row.project_id !== projectId && row.automation_scope === row.project_id) continue
       const job = row.content ? JSON.parse(row.content) as FlowJob : null
+      if(deferred&&row.project_id===projectId&&row.scene_id!==sceneId)continue
+      if(job?.editQueued&&row.scene_id!==sceneId)continue
       if (!batchId || row.project_id !== projectId || row.scene_id === sceneId || row.state !== 'submission-uncertain' || job?.postBatch?.id !== batchId || !job.submissionAcknowledged || job.abandoned) throw new StorageError('BUSY', 'Another generation attempt is active or uncertain. Reconcile it before preparing another request.')
     }
   }
-  private async prepareRequest(projectId: string, sceneId: string, batchId?: string, parallel = false): Promise<GenerationAttempt> {
+  private async prepareRequest(projectId: string, sceneId: string, batchId?: string, parallel = false,deferred=false): Promise<GenerationAttempt> {
     if (!UUID_PATTERN.test(projectId)) invalid('The project identifier is invalid.')
-    this.checkActive(projectId, sceneId, batchId, parallel)
+    this.checkActive(projectId, sceneId, batchId, parallel,deferred)
     const project = await this.project(projectId)
     if (batchId && project.outputType !== 'post') invalid('Only product Post requests may overlap.')
     const scene = project.outputType === 'reel' ? project.storyboard.scenes.find(item => item.id === sceneId) : undefined
@@ -227,12 +275,17 @@ export class Generations {
       }
     }
     const prompt = revision ? reviewRevisionPrompt(preview.text, revision.note, revision.sourceAttemptId) : preview.text
+    if(deferred&&(!revision||project.outputType!=='post'))invalid('Describe changes for a saved Post image before queuing them.')
     const id = randomUUID(), now = new Date().toISOString()
     try {
       transaction(this.db, () => {
         if(revision&&this.logoInfo(this.get(revision.sourceAttemptId)).status==='processing')invalid('Wait for logo cleanup to finish before applying image changes in Flow.')
-        this.checkActive(projectId, sceneId, batchId, parallel)
+        this.checkActive(projectId, sceneId, batchId, parallel,deferred)
         this.db.prepare(`INSERT INTO generation_attempts(id, project_id, scene_id, output_type, prompt, references_json, preset, source_duration, state, result_path, error, created_at, updated_at, automation_scope, revision_json, theme_reference_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', NULL, NULL, ?, ?, ?, ?, ?)`).run(id, projectId, sceneId, project.outputType, prompt, JSON.stringify(preview.references.map(item => item.id)), project.preset, scene?.sourceDuration ?? null, now, now, parallel ? projectId : null, revision ? JSON.stringify(revision) : null, preview.selectedReference ? JSON.stringify(preview.selectedReference) : null)
+        if(deferred){
+          const job:FlowJob={attemptId:id,projectId,stage:'preparing',editQueued:true,message:'Image changes queued with this exact image and description.',projectUrl:'',baseline:[],resultIds:[],imported:{},outputs:1,updatedAt:now}
+          this.db.prepare('INSERT INTO flow_jobs(attempt_id,project_id,content) VALUES(?,?,?)').run(id,projectId,JSON.stringify(job))
+        }
       })
     } catch (error) {
       if (error instanceof Error && /UNIQUE/.test(error.message)) throw new StorageError('BUSY', 'Another generation attempt is active or uncertain. Reconcile it before preparing another request.')

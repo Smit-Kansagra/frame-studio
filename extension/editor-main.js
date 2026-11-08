@@ -19,6 +19,13 @@ export async function editPromptInPage(prompt, nonce) {
     const range=document.createRange();range.selectNodeContents(editor)
     const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range)
     document.execCommand('insertText',false,prompt)
+    // Background tabs can refuse execCommand selection. Angular's editable
+    // input still receives its own DOM/input transaction, scoped to this nonce.
+    if(compact(text())!==compact(prompt)){
+      editor.replaceChildren(document.createTextNode(prompt))
+      editor.dispatchEvent(new InputEvent('input',{bubbles:true,composed:true,inputType:'insertText',data:prompt}))
+      editor.dispatchEvent(new Event('change',{bubbles:true}))
+    }
   }
   await new Promise(resolve=>setTimeout(resolve,150))
   if(!editor.isConnected || compact(text())!==compact(prompt)) throw new Error('Flow did not retain the complete prompt. Nothing was submitted.')

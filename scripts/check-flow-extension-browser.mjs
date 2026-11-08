@@ -220,6 +220,42 @@ try {
     assert.equal(await page.locator('[contenteditable="true"]').textContent(),request.prompt)
     assert.equal(await page.evaluate(()=>window.fixture.submissions),0)
   })
+  await check('background editor updates its model when execCommand refuses selection',async page=>{
+    await page.evaluate(()=>{
+      const editor=document.createElement('div');editor.contentEditable='true';editor.setAttribute('role','textbox');editor.setAttribute('aria-label','What do you want to create?');editor.textContent='Previous product prompt'
+      editor.addEventListener('input',()=>window.fixture.editorModel=editor.textContent)
+      document.querySelector('textarea').replaceWith(editor);document.execCommand=()=>false
+    })
+    const prepared=await command(page,'prepare',request);assert.equal(prepared.ok,true,prepared.error)
+    assert.equal(await page.evaluate(()=>window.fixture.editorModel),request.prompt)
+    assert.equal(await page.evaluate(()=>window.fixture.submissions),0)
+  })
+  await check('only a newly observed failed card with this exact prompt terminates collection',async page=>{
+    await page.evaluate(prompt=>{const old=document.createElement('flow-grid-tile-container');old.setAttribute('data-prompt',prompt);old.textContent='This generation might violate our policies.';document.body.append(old)},request.prompt)
+    assert.equal((await command(page,'prepare',request)).ok,true)
+    const result=()=>command(page,'results',{url:request.url,prompt:request.prompt,outputType:'post',baseline:[]})
+    assert.equal((await result()).ok,true,'An old failure must not terminate a retry')
+    await page.evaluate(()=>{const other=document.createElement('flow-grid-tile-container');other.setAttribute('data-prompt','Other product');other.textContent='This generation might violate our policies.';document.body.append(other)})
+    assert.equal((await result()).ok,true,'Another product failure must not terminate this request')
+    await page.evaluate(prompt=>{const failed=document.createElement('flow-grid-tile-container');failed.setAttribute('data-prompt',prompt);failed.textContent='This generation might violate our policies.';document.body.append(failed)},request.prompt)
+    const failed=await result();assert.equal(failed.ok,false);assert.match(failed.error,/^Flow generation failed:/)
+  })
+  await check('preparation closes stale duplicate attachment menus before editing',async page=>{
+    await page.evaluate(()=>{
+      const backdrop=document.createElement('div');backdrop.className='cdk-overlay-backdrop';backdrop.textContent='Dismiss menu';document.body.append(backdrop)
+      for(let n=0;n<2;n++){const menu=document.createElement('div');menu.setAttribute('role','menu');menu.innerHTML='<button role="menuitem">Add to prompt</button>';document.body.append(menu)}
+      backdrop.onclick=()=>{document.querySelectorAll('[role="menu"]').forEach(menu=>menu.remove());backdrop.remove()}
+    })
+    const prepared=await command(page,'prepare',request);assert.equal(prepared.ok,true,prepared.error);assert.equal(await page.locator('[role="menu"]').count(),0)
+  })
+  await check('preparation reacquires the editor after old attachment removal rerenders it',async page=>{
+    await page.evaluate(()=>{
+      const remove=document.createElement('button');remove.setAttribute('aria-label','Remove image');remove.textContent='Remove image'
+      remove.onclick=()=>{const old=document.querySelector('textarea'),next=old.cloneNode(true);old.replaceWith(next);remove.remove()}
+      document.querySelector('#attachments').append(remove)
+    })
+    const prepared=await command(page,'prepare',request);assert.equal(prepared.ok,true,prepared.error);assert.equal(await page.locator('textarea').inputValue(),request.prompt)
+  })
   await check('100 percent upload still waits for completed processing beyond the former one minute timeout', async page => {
     assert.equal((await command(page,'prepare',request)).ok,true)
     await page.evaluate(name=>{

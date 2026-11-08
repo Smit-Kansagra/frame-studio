@@ -1,6 +1,6 @@
 # Frame Studio Flow Companion
 
-Current app: 0.13.0-preview.37. Current adapter: 0.1.6-fast.22.
+Current app: 0.13.0-preview.45. Current adapter: 0.1.6-fast.24.
 
 ## Install and connect
 
@@ -14,11 +14,13 @@ No passwords or cookies are read. Pairing is explicit, revocable, and limited to
 
 ## Projects and generation
 
-Saving a project is local. Generate creates and names its own Flow project. Each software project UUID owns a separate Flow tab, URL, request queue and result folder. Up to three submitted requests can overlap across projects. Browser edits and native submission acknowledgements remain serialized to prevent reference overlap.
+Saving a project is local. Generate creates and names its own Flow project. Each software project UUID owns a separate Flow tab, URL, request queue and result folder. There is no app-imposed limit on concurrent projects. Different project tabs upload, prepare prompts and collect results independently. Commands within one tab remain ordered. Only foreground naming/submission turns and ambiguous native download filename capture windows are serialized across tabs; they do not hold other projects' uploads. Each project's existing three-request generation pipeline remains separate from every other project.
+
+The native driver resolves the exact Flow document URL before finding Generate: Chrome can expose inactive tabs' buttons as visible too. Only the native ticket/click holds the foreground lock. A slow acknowledgement stays in that project's own lane, with priority over its queued result checks; other projects can submit immediately. A native failure explicitly confirmed before invocation is retryable. Errors after invocation retain submission uncertainty and cannot trigger a duplicate click.
 
 Each uploaded product photo gets one Post request. Assigned visual references use their own name and composition prompt. Exclusions can be written in the master prompt. The Post theme editor has no separate Composition tab or per-reference negative field; stored legacy fallback/negative data is retained. New Posts can use the master direction without a separate composition. Generate starts immediately without a confirmation popup. The optional References and prompts disclosure shows assigned thumbnails with exact final prompts. Fast repeated clicks are guarded locally; submission protection remains active in the coordinator. Cover usage quotas are configured in Theme create/edit and reset for each project.
 
-Clips product cards show text without photo thumbnails. The main image viewer keeps product review, comments, version selection, arrows, keyboard navigation and touch swipe. Apply changes in Flow sends the exact selected saved image and comment with supporting references. A new version starts pending review. Uncertain submissions are never automatically repeated; Resume only collects the existing request.
+Projects with saved generation attempts reopen directly in Clips. Clips product cards show text without photo thumbnails. The main image viewer keeps product review, comments, version selection, arrows, keyboard navigation and touch swipe. Approve all approves this project's completed, locally cleaned current image versions together and preserves their descriptions. Active, failed, unfinished or changed versions are skipped. Apply changes in Flow sends the exact selected saved image and comment with supporting references. A new version starts pending review. Uncertain submissions are never automatically repeated; Resume only collects the existing request.
 
 ## Local cleanup and review
 
@@ -41,3 +43,11 @@ Reels retain the existing local FFmpeg workflow. The image logo-cleanup worker i
 Focused worker, storage, queue, transport and isolated Chrome checks cover progress gating, parallel cleanup, input/result ownership, review comments, bulk export and recovery. Fixture checks do not establish compatibility with every live Google Flow UI or account.
 
 Calibrated visible-logo masks and license attribution are included under third-party/gemini-watermark. The local inpainting model, pinned checksum, source and MIT code/weight licenses are included under third-party/migan. ONNX Runtime telemetry is disabled before initialization. Dark mode uses near-black backgrounds, neutral grey surfaces and restrained purple accents based on the supplied UI reference. The Studio home opens directly to projects, with the decorative start-project banner removed. Dark is the default; an existing light preference is preserved. The root README is separate project documentation.
+
+## Failed uploads and parallel recovery
+
+Each project has an independent browser lane without a shared project-count or submission cap. One stalled upload cannot hold another project's uploads or result checks. A product preparation failure or an explicit Flow submission rejection does not stop unrelated products. Each failed product has a Retry control in Clips. It retries the original saved prompt and reference snapshot for that product only, including while another product in the same batch is running. Duplicate queued retries coalesce. Queued retries interrupted by app shutdown become retryable again after restart. A submitted request with uncertain acceptance is checked for existing results; it is not blindly submitted twice.
+
+Change image is available as soon as that product has a cleaned image, even while other products generate. Its exact source image, description, final prompt and reference mapping are queued immediately. Several products can queue changes, and entries survive app restart. The owned tab processes changes in order without mixing products. Transient Chrome tab-edit failures and prompt preparation failures receive bounded retries before submission; uncertain clicks do not.
+
+Native downloads accept Flow's truncated title only alongside the selected media ID suffix. Collection first checks existing downloads for that exact result and approved origin/project before requesting another download. Original files recovered this way are validated within Downloads and moved into the project's staging folder. Actual Flow policy failures are reported only when a new failed card can be matched to the exact request; they are not automatically resubmitted. Unrelated products continue.

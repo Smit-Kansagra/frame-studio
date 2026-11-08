@@ -19,6 +19,13 @@ await delay(0)
 const later=queue.dispatch('attach',async()=>{order.push('upload-2')})
 const result=queue.dispatch('results',async()=>{order.push('result')})
 unlock();await Promise.all([current,later,result]);assert.deepEqual(order,['upload-1','result','upload-2'])
+const urgent=new FlowCommandQueue(),urgentOrder=[]
+let finishUpload
+const held=urgent.dispatch('attach',()=>new Promise(resolve=>{finishUpload=resolve}))
+await delay(0)
+const collections=Array.from({length:6},()=>urgent.dispatch('results',async()=>{urgentOrder.push('result')}))
+const confirmation=urgent.dispatch('confirmSubmit',async()=>{urgentOrder.push('confirm')})
+finishUpload();await Promise.all([held,...collections,confirmation]);assert.equal(urgentOrder[0],'confirm','Confirmation must not wait behind result collection after its foreground turn ends')
 const fairness=new FlowCommandQueue(),fairOrder=[]
 let releaseFair
 const blocker=fairness.dispatch('attach',()=>new Promise(resolve=>{releaseFair=resolve}))
@@ -33,8 +40,9 @@ const product=await ws.products.save({name:'Four products',description:'',notes:
 const theme=await ws.themes.save({name:'Direction',description:'',coverAssetId:null,referenceAssetIds:[],masterPrompt:'Style this product',outputType:'post',aspectRatio:'1:1',defaultDuration:0,compositionPrompt:'One photo',scenes:[]})
 const makeProject=name=>ws.projects.save({name,productId:product.id,themeId:theme.id,characterId:null,outputType:'post',preset:'post-square',duration:0})
 const projects=[await makeProject('A'),await makeProject('B')],remote=new Map(),prepared=new Map(),events=[],downloaded=new Map()
-let browserBusy=false,submitted=0,firstJob,firstReadyAt=0,savedAt=0,scheduler
-const op=async(id,kind,action)=>{assert.equal(browserBusy,false,'Only one Chrome command may run at a time');browserBusy=true;events.push({id,kind,time:Date.now()});try{return await action()}finally{browserBusy=false}}
+const browserBusy=new Set()
+let submitted=0,firstJob,firstReadyAt=0,savedAt=0,scheduler
+const op=async(id,kind,action)=>{assert.equal(browserBusy.has(id),false,'Only one command per project tab');browserBusy.add(id);events.push({id,kind,time:Date.now()});try{return await action()}finally{browserBusy.delete(id)}}
 const factory=(id,dispatch)=>({
   granularQueue:true,
   createProject:commit=>dispatch('createProject',()=>op(id,'create',async()=>{const url=`https://flow.google.com/project/${id}`;await commit(url);return url})),
@@ -72,7 +80,7 @@ try{
   assert.ok([...downloaded.values()].every(count=>count===1),'Background sweep and foreground queue never download the same result twice')
   assert.ok(savedAt-firstReadyAt<1000,`Review latency ${savedAt-firstReadyAt}ms must not wait for the full upload batch`)
   assert.ok(events.some(e=>e.kind.startsWith('upload-')&&e.time>savedAt),'First result is saved while more uploads are still ahead')
-  for(let i=0;i<events.length;i++)if(events[i].kind==='native-start')assert.equal(events[i+1].kind,'native-end','Ready results cannot interrupt native submit/click/ack')
+  let nativeActive=false;for(const event of events){if(event.kind==='native-start'){assert.equal(nativeActive,false,'Native submit/click/ack cannot overlap another native turn');nativeActive=true}if(event.kind==='native-end')nativeActive=false};assert.equal(nativeActive,false)
   for(const p of projects)assert.equal((await ws.generations.list(p.id)).filter(a=>a.state==='ready-for-review').length,4)
   console.log(`PASS completed results preempt queued photo uploads; first review latency ${savedAt-firstReadyAt}ms during long uploads; two projects / eight results remain isolated; no duplicate download; native submit uninterrupted.`)
 }finally{clearInterval(pump);await scheduler?.close();await ws.close()}

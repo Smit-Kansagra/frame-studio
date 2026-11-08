@@ -2,8 +2,8 @@
 // A delayed/interrupted download must not cause another Original-size click.
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { ProjectTabs } from '../extension/project-tabs.js'
-import { captureOriginal, safeMediaUrl } from '../extension/result-download.js'
+import { ProjectTabs, retryTabEdit } from '../extension/project-tabs.js'
+import { captureOriginal, safeMediaUrl, existingOriginal } from '../extension/result-download.js'
 let listener,ws,captures=0,started=0,native=false
 const filenameListeners=new Set(), mediaId='981ed90b-1ef1-4f17-9230-13158641ff87'
 const items=new Map(),responses=new Map()
@@ -31,9 +31,9 @@ const chrome={
   downloads:{onDeterminingFilename:{addListener:fn=>filenameListeners.add(fn),removeListener:fn=>filenameListeners.delete(fn)},async download(){started++;items.set(started,{id:started,state:'interrupted',byExtensionId:'fixture',filename:`C:/Downloads/Frame Studio/test-${started}.png`});return started},async search({id}){return[items.get(id)]}},
 }
 const code=(await readFile('extension/background.js','utf8')).replace(/^import .*$/gm,'')
-new Function('chrome','WebSocket','ProjectTabs','captureOriginal','safeMediaUrl',code)(chrome,Socket,ProjectTabs,async(...args)=>{
+new Function('chrome','WebSocket','ProjectTabs','captureOriginal','safeMediaUrl','existingOriginal','retryTabEdit',code)(chrome,Socket,ProjectTabs,async(...args)=>{
   captures++;return captureOriginal(...args)
-},safeMediaUrl)
+},safeMediaUrl,existingOriginal,retryTabEdit)
 await new Promise(resolve=>listener({type:'connect',code:`12345.${'a'.repeat(64)}`,tabId:1},{id:'fixture',url:chrome.runtime.getURL('popup.html')},reply=>{assert.equal(reply.ok,true,reply.message);resolve()}))
 let sequence=0
 async function command(nonce){const id=`request-${++sequence}`;await ws.onmessage({data:JSON.stringify({type:'command',id,action:'download',payload:{url:'https://flow.google.com/project/one',nonce,result:{id:native?mediaId:'direct'}}})});return responses.get(id)}

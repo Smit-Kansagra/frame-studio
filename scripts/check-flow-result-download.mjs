@@ -1,6 +1,6 @@
 // Focused extension download association checks; no app/database or generation.
 import assert from 'node:assert/strict'
-import { captureOriginal, safeMediaUrl, matchesOriginalName } from '../extension/result-download.js'
+import { captureOriginal, safeMediaUrl, matchesOriginalName, existingOriginal } from '../extension/result-download.js'
 const projectUrl='https://flow.google.com/project/existing-result'
 const mediaId='981ed90b-1ef1-4f17-9230-13158641ff87'
 const nonce='11111111-1111-4111-8111-111111111111'
@@ -20,6 +20,12 @@ assert.equal(matchesOriginalName(currentName,title,mediaId),true)
 assert.equal(matchesOriginalName(currentName,title),false,'A short ID needs the selected media ID')
 assert.equal(matchesOriginalName(currentName,title,'11111111-1111-4111-8111-111111111111'),false)
 assert.equal(matchesOriginalName('Other_photo_981ed90b.jpg',title,mediaId),false)
+assert.equal(matchesOriginalName('Woman_taking_mirror_selfie_981ed90b (5).jpg',title,mediaId),true,'Flow truncates titles while retaining the selected media ID')
+assert.equal(matchesOriginalName('Woman_taking_mirror_selfie_20261025213408.jpg',title,mediaId),false,'A timestamp alone cannot validate a truncated title')
+let scopedSearch
+const recovered=await existingOriginal({search:async query=>{scopedSearch=query;return [item({state:'complete',filename:'Woman_taking_mirror_selfie_981ed90b.jpg',referrer:'https://flow.google.com/project/wrong'}),item({state:'complete',filename:'Woman_taking_mirror_selfie_981ed90b (5).jpg'})]}},{projectUrl,mediaId,title})
+assert.equal(recovered.filename,'Woman_taking_mirror_selfie_981ed90b (5).jpg');assert.match(scopedSearch.filenameRegex,/981ed90b/)
+assert.equal(new RegExp(scopedSearch.filenameRegex).test(recovered.filename),true)
 assert.equal(matchesOriginalName('Woman_taking_mirror_selfie_fashion_981ed90.jpg',title,mediaId),false)
 assert.equal(matchesOriginalName('Woman_taking_mirror_selfie_4bf7b01f.jpg','Woman taking mirror selfie','4bf7b01f-505b-4cb9-a018-9d18b49b346b'),true)
 let currentSuggestion

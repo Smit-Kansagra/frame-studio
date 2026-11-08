@@ -137,6 +137,10 @@ textarea { line-height: 1.7; }
 .post-photo-strip { gap: 12px; padding: 3px 2px 8px; }
 .post-photo-strip .product-review-card { position: relative; flex: 0 0 150px; min-height: 68px; align-items: center; justify-content: center; padding: 16px; overflow: hidden; background: var(--surface-soft); }
 .post-photo-strip .product-review-card.selected { outline: none; background: var(--selected); border-color: var(--accent); }
+.product-review-item { position: relative; flex: 0 0 150px; }
+.post-photo-strip .product-review-item .product-review-card { width: 100%; }
+.product-retry-button { position: absolute; top: 5px; right: 5px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; background: var(--surface); color: var(--accent); cursor: pointer; }
+.product-retry-button:disabled { opacity: .45; cursor: wait; }
 .product-review-line { position: absolute; bottom: 0; left: 0; right: 0; height: 4px; }
 .status-pending .product-review-line { background: #e9ba45; }
 .status-approved .product-review-line { background: #40bd83; }

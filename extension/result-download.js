@@ -16,8 +16,27 @@ export function matchesOriginalName(filename, title, mediaId) {
   // alone can be shared by several products/projects and is not sufficient.
   const match = /^(.*?)_(\d{14}|[0-9a-f]{8})(?: \(\d+\))?\.(?:png|jpe?g|webp|mp4|mov|webm)$/i.exec(base)
   const canonical = value => value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
-  if (!match || !canonical(title) || canonical(match[1]) !== canonical(title)) return false
-  return match[2].length === 14 || (/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(mediaId || '') && match[2].toLowerCase() === mediaId.slice(0, 8).toLowerCase())
+  if (!match || !canonical(title)) return false
+  const stem=canonical(match[1]),full=canonical(title)
+  if(match[2].length===14)return stem===full
+  // Flow truncates long download titles, but retains this selected media's ID.
+  // Timestamp-only names still require the complete title above.
+  return /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(mediaId || '') && match[2].toLowerCase()===mediaId.slice(0,8).toLowerCase() &&
+    (stem===full || stem.length>=16 && full.startsWith(stem))
+}
+export async function existingOriginal(api,{projectUrl,mediaId,title}){
+  if(!/^[0-9a-f-]{36}$/i.test(mediaId)||typeof api.search!=='function')return
+  // Query this result suffix only, never enumerate the user's download history.
+  const items=await api.search({filenameRegex:`_${mediaId.slice(0,8)}( \\(\\d+\\))?\\.(png|jpe?g|webp|mp4|mov|webm)$`,orderBy:['-startTime']})
+  const origin=new URL(projectUrl).origin
+  return items.find(item=>{
+    if(!item)return false
+    if(item.danger&&!['safe','accepted','allowlistedByPolicy','deepScannedSafe'].includes(item.danger))return false
+    if([item.url,item.finalUrl].some(value=>{try{const id=/\/(?:image|video)\/([0-9a-f-]{36})$/i.exec(new URL(value).pathname)?.[1];return id&&id!==mediaId}catch{return false}}))return false
+    const referrer=item.referrer?.split('#')[0]
+    return item.state==='complete'&&item.exists!==false&&matchesOriginalName(item.filename,title,mediaId)&&safeMediaUrl(item.finalUrl||item.url,origin)&&
+      (!referrer||referrer===origin||referrer===`${origin}/`||referrer===projectUrl.split('#')[0])
+  })
 }
 export async function captureOriginal(api, { projectUrl, mediaId, nonce, title }, trigger) {
   const origin = new URL(projectUrl).origin

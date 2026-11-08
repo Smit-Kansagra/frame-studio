@@ -3,7 +3,7 @@
 (() => {
   if (globalThis.__frameStudioCompanion) return
   globalThis.__frameStudioCompanion = true
-  const ADAPTER_VERSION = '0.1.6-fast.22'
+  const ADAPTER_VERSION = '0.1.6-fast.24'
   const seen = new Map()
   let prepared = null
   let submission = null
@@ -337,6 +337,7 @@
       // or a successful menu click cannot count as attachment confirmation.
       const current = libraryReference(name)
       if (!current || current.key !== library.key) throw new Error('The uploaded reference changed before attachment. Nothing was selected.')
+      await closeStaleMenus()
       const more = one([...current.tile.querySelectorAll('button[aria-label="More options"]')], 'reference menu')
       more.click()
       await menuControl(/^add to prompt$/i, 'Add to prompt')
@@ -600,6 +601,18 @@
     return [...result.values()]
   }
   const resultPrompts = new Map()
+  const failedBefore=new Map()
+  async function closeStaleMenus(){
+    if(![...document.querySelectorAll('[role="menu"]')].some(visible))return
+    const backdrop=[...document.querySelectorAll('.cdk-overlay-backdrop')].find(visible)
+    if(backdrop)backdrop.click()
+    else{
+      const outside=document.querySelector('.header-title')
+      outside?.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'mouse'}))
+      outside?.click()
+    }
+    await wait(()=>![...document.querySelectorAll('[role="menu"]')].some(visible),'previous Flow menu closed',5000)
+  }
   let openedResultFooter = null
   async function closeResultInfo(footer) {
     const panels = [...document.querySelectorAll('flow-info-panel')].filter(visible)
@@ -717,6 +730,9 @@
       if (!['post', 'reel'].includes(payload.outputType) || typeof payload.prompt !== 'string' || !payload.prompt.trim() || payload.prompt.length > 150000 || !Number.isInteger(payload.outputs) || payload.outputs < 1 || payload.outputs > 4) throw new Error('Invalid prepared generation settings.')
       prepared = null
       submission = null
+      failedBefore.set(`${location.href}:${compact(payload.prompt)}`,new Set(document.querySelectorAll('flow-grid-tile-container,[data-generation-id]')))
+      if(failedBefore.size>100)failedBefore.delete(failedBefore.keys().next().value)
+      await closeStaleMenus()
       await wait(() => {
         try { return !!promptEditor() } catch { return false }
       }, 'project prompt editor ready', 25000)
@@ -731,14 +747,14 @@
         await setting(/outputs|results per prompt|number of images|number of videos/i, String(payload.outputs), new RegExp(`^(?:x\\s*)?${payload.outputs}(?:\\s*(?:outputs?|images?|videos?))?$`, 'i'))
         if (payload.outputType === 'reel') await setting(/duration|length/i, `${payload.sourceDuration}s`, new RegExp(`^${payload.sourceDuration}\\s*(?:s|seconds?)$`, 'i'))
       }
-      const editor = promptEditor(), area = composer()
-      const remove = () => [...new Set([
+      const remove = () => {const area=composer();return [...new Set([
         ...controls(/^remove(?: reference| image| attachment)?(?:\s.*)?$/i, area),
         ...[...area.querySelectorAll('button[aria-label="Ingredient"]')].filter(button => visible(button) &&
           [...button.querySelectorAll('mat-icon')].some(icon => /^cancel$/i.test(compact(icon.textContent)))),
-      ])]
+      ])]}
       for (let i = 0; remove().length && i < 60; i++) { click(remove()[0], 'remove old prompt attachment'); await new Promise(resolve => setTimeout(resolve, 100)) }
       if (remove().length) throw new Error('Old prompt attachments could not be cleared safely.')
+      const editor=promptEditor()
       const editNonce=crypto.randomUUID();editor.setAttribute('data-frame-edit',editNonce)
       try {
         const edit=await chrome.runtime.sendMessage({type:'frame-flow-edit-prompt',nonce:editNonce,prompt:payload.prompt})
@@ -761,6 +777,7 @@
       if (!prepared || prepared.url !== location.href) throw new Error('Prepare this project before attaching files.')
       const file = payload.file
       if (!file || typeof file.name !== 'string' || file.name.length > 200 || /[\\/]/.test(file.name) || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || typeof file.base64 !== 'string' || file.base64.length > 28_000_000) throw new Error('Invalid reference image payload.')
+      if(attachmentPresent(file.name)){if(!prepared.files.includes(file.name))prepared.files.push(file.name);return null}
       const area = composer()
       if (payload.kind === 'startFrame') click(one(controls(/^(?:\+\s*)?add start frame$/i, area), 'Add start frame'), 'Add start frame')
       const input = await openReferenceInput(area, file.name)
@@ -821,6 +838,14 @@
       throw new Error('Flow did not acknowledge Start generation within 45 seconds. The click alone is not confirmation. Check the prepared prompt and any Flow warning; submission is uncertain. No automatic retry was made. Resume collection only checks for an existing result.')
     }
     if (action === 'results') {
+      const failed=[...document.querySelectorAll('flow-grid-tile-container,[data-generation-id]')].find(tile=>{
+        const before=failedBefore.get(`${location.href}:${compact(payload.prompt)}`)
+        if(!before||before.has(tile))return false
+        if(!visible(tile)||!/violat|polic(?:y|ies)|generation failed|could not generate|unable to generate/i.test(tile.textContent||''))return false
+        const saved=tile.getAttribute('data-prompt')||tile.getAttribute('aria-label')||tile.querySelector('.prompt-text,[data-prompt]')?.textContent
+        return compact(saved)===compact(payload.prompt)
+      })
+      if(failed)throw new Error(`Flow generation failed: ${compact(failed.textContent).slice(0,350)}. Other products can continue; this request is not automatically resubmitted.`)
       const results = []
       for (const item of cards().filter(item => item.ready && item.kind === payload.outputType && !payload.baseline.includes(item.id))) {
         let prompt
@@ -835,6 +860,7 @@
       if (!result) throw new Error('The matching result is no longer available.')
       const card = one([...document.querySelectorAll(result.selector)], 'matched result')
       // These hotbar controls are intentionally revealed on hover in Flow.
+      await closeStaleMenus()
       const more = one([...card.querySelectorAll('button[aria-label="More options"]')], 'result menu')
       more.click()
       await menuControl(/^download$/i, 'Download')

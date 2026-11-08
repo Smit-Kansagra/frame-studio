@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { StorageError } from './storage/errors.cjs'
+import { FlowNotSubmittedError, StorageError } from './storage/errors.cjs'
 import { isFlowProject } from './flow-urls.cjs'
 
 export function nativeFlowSubmit(script: string) {
@@ -14,9 +14,12 @@ export function nativeFlowSubmit(script: string) {
         windowsHide: true, timeout: 25000, maxBuffer: 32 * 1024,
         env: { ...process.env, FRAME_FLOW_PROJECT_URL: projectUrl, FRAME_FLOW_WINDOW_TITLE: title },
       }, (error, stdout) => {
-        let result: {activated?: boolean, error?: string} = {}
+        let result: {activated?: boolean, attempted?:boolean, error?: string} = {}
         try { result = JSON.parse(stdout.trim()) } catch {}
-        if (error || result.activated !== true) reject(new StorageError('INVALID_REQUEST', result.error || 'Windows could not activate the selected Chrome Flow button. Submission is uncertain; no second click was made.'))
+        if (error || result.activated !== true) {
+          const detail=result.error || 'Windows could not activate the selected Chrome Flow button. Submission is uncertain; no second click was made.'
+          reject(result.activated!==true&&result.attempted===false?new FlowNotSubmittedError(detail):new StorageError('INVALID_REQUEST',detail))
+        }
         else resolve()
       })
     })

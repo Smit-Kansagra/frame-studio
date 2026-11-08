@@ -12,7 +12,7 @@ export type FlowConnection = { state: 'not-connected' | 'opening' | 'connected' 
 export type FlowActivity = { id: string; label: string; state: 'pending' | 'running' | 'done' | 'error' | 'uncertain'; detail: string; updatedAt: string }
 export type FlowActivityUpdate = Omit<FlowActivity, 'updatedAt'>
 export type FlowProject = { projectId: string; url: string | null; state: 'creating' | 'ready' | 'needs-attention'; message: string; revision: number; activity?: FlowActivity[] }
-export type FlowJob = { attemptId: string; projectId: string; stage: 'preparing' | 'submitting' | 'waiting' | 'downloading' | 'complete' | 'needs-attention'; message: string; projectUrl: string; baseline: string[]; resultIds: string[]; imported: Record<string, string>; outputs: number; updatedAt: string; activity?: FlowActivity[]; abandoned?: boolean; submissionAcknowledged?: boolean; submittedAt?: string; collectionStopped?: boolean; nextCollectionAt?: string; collectionFailures?: number; postBatch?: { id?: string; index: number; total: number; productName: string } }
+export type FlowJob = { attemptId: string; projectId: string; stage: 'preparing' | 'submitting' | 'waiting' | 'downloading' | 'complete' | 'needs-attention'; message: string; projectUrl: string; baseline: string[]; resultIds: string[]; imported: Record<string, string>; outputs: number; updatedAt: string; activity?: FlowActivity[]; abandoned?: boolean; submissionAcknowledged?: boolean; submissionRejected?:boolean; generationFailed?:boolean; editQueued?:boolean; retryQueued?:boolean; submittedAt?: string; collectionStopped?: boolean; nextCollectionAt?: string; collectionFailures?: number; postBatch?: { id?: string; index: number; total: number; productName: string } }
 export type FlowActiveRequest = { attemptId: string; projectId: string; projectName: string; state: GenerationState; automatic: boolean }
 export type GenerationState = 'queued' | 'paused' | 'submission-uncertain' | 'ready-for-review' | 'failed'
 export type SceneReview = { projectId: string; sceneId: string; selectedAttemptId: string | null; status: 'pending' | 'approved' | 'needs-changes' | 'needs-recheck'; note: string; updatedAt: string }
@@ -78,7 +78,34 @@ export type ProjectSnapshot = { product: ProductInfo; theme: ThemeInfo; characte
 export type ProjectInfo = Omit<ProjectDraft, 'storyboard'> & { id: string; revision: number; createdAt: string; updatedAt: string; snapshot: ProjectSnapshot; storyboard: ProjectStoryboard }
 export type DeletedProjectInfo = { id: string; name: string; revision: number; deletedAt: string }
 export type ImageSelection = { assets: AssetInfo[]; failures: { filename: string; message: string }[] }
+export type FoundProduct = { product_url: string; image_url: string }
+export type ProductFindJob = { state: 'idle' | 'running' | 'complete' | 'error' | 'cancelled'; message: string; startedAt: string | null }
+export type ProductMarketplace = 'myntra' | 'meesho' | 'flipkart' | 'amazon'
+export type ProductFindRequest = { query: string; platforms: ProductMarketplace[]; lookbackDays: 7 | 14; autoRefresh: boolean }
+export type ProductFindState = { folder: string; products: FoundProduct[]; updatedAt: string | null; cliPath: string | null; automation: ProductFindJob; savedSearch: ProductFindRequest | null; nextRunAt: string | null }
+export type DiscoverySettings = { youtubeKey: string; geminiKey: string; hasYoutubeKey?: boolean; hasGeminiKey?: boolean; ai: 'none' | 'ollama' | 'antigravity' | 'hybrid'; model: string; channels: string; pages: { id: string; name: string; query: string; platforms: ProductMarketplace[]; lookbackDays: 7 | 14; autoRefresh: boolean }[] }
+export type DiscoveryProduct = FoundProduct & { pageId: string; title: string; sources: { url: string; creator: string; views: number; published: string }[]; state: 'ready' | 'downloaded' | 'posted'; foundAt: string }
+export type DiscoveryState = { settings: DiscoverySettings; products: DiscoveryProduct[]; job: ProductFindJob; nextRunAt: string | null }
 export type FrameStudioAPI = {
+  discovery: {
+    status: () => Promise<DiscoveryState>
+    save: (settings: DiscoverySettings) => Promise<void>
+    start: (pageId: string) => Promise<void>
+    cancel: () => Promise<void>
+    download: (pageId: string, url: string) => Promise<void>
+    markPosted: (pageId: string, url: string) => Promise<void>
+    copy: (pageId: string, url: string) => Promise<void>
+  }
+  productFind: {
+    start: (request: ProductFindRequest) => Promise<void>
+    stopAutoRefresh: () => Promise<void>
+    cancel: () => Promise<void>
+    status: () => Promise<ProductFindState>
+    openFolder: () => Promise<void>
+    openProduct: (url: string) => Promise<void>
+    copyProduct: (url: string) => Promise<void>
+  }
+
   readonly platform: 'windows'
   readonly phase: 11
   flow: {
@@ -97,6 +124,7 @@ export type FrameStudioAPI = {
     generate: (projectId: string, sceneId: string, outputs: number) => Promise<AppResult<FlowJob>>
     generatePosts: (projectId: string) => Promise<AppResult<FlowJob>>
     resume: (attemptId: string) => Promise<AppResult<FlowJob>>
+    retry: (attemptId: string) => Promise<AppResult<FlowJob>>
     resumePosts: (projectId: string) => Promise<AppResult<FlowJob[]>>
     pairCompanion: () => Promise<AppResult<{ code: string; expiresAt: string }>>
     copyPairingCode: () => Promise<AppResult<null>>
@@ -120,6 +148,7 @@ export type FrameStudioAPI = {
     reviews: (projectId: string) => Promise<AppResult<SceneReview[]>>
     review: (projectId: string, sceneId: string, attemptId: string, status: 'pending' | 'approved' | 'needs-changes', note: string) => Promise<AppResult<SceneReview>>
     approvePost: (attemptId:string,note:string) => Promise<AppResult<{review:SceneReview;logo:LogoReview}>>
+    approveAll: (projectId:string,items:{attemptId:string;note:string}[]) => Promise<AppResult<{approved:number;skipped:number;reviews:SceneReview[];logos:LogoReview[]}>>
     logoReviews: (projectId: string) => Promise<AppResult<LogoReview[]>>
     reviewLogo: (attemptId: string, status: 'approved' | 'needs-changes') => Promise<AppResult<LogoReview>>
     retryLogo: (attemptId: string,area?:LogoRepairArea) => Promise<AppResult<LogoReview>>
