@@ -4,13 +4,21 @@ import { mkdir, readFile, writeFile, rename, copyFile } from 'node:fs/promises'
 import path from 'node:path'
 import { listing } from './product-find-research.cjs'
 import type { ProductMarketplace } from './contracts.cjs'
-import type { Category, CatalogueIdentity, FindSelection, PackProduct, PackSettings, PackStore, PlanSlot, ReadyPack } from './ready-packs-types.cjs'
+import type { Category, CatalogueIdentity, FindSelection, PackProduct, PackSettings, PackStore, PlanSlot, ReadyPack, StoreRanks } from './ready-packs-types.cjs'
 export const findStores = ['meesho','flipkart','amazon','myntra','ajio','libas']
 export const defaultFindSelection=():FindSelection=>({category:'auto',min:200,max:1000,size:5,stores:[],mode:'auto',storeMode:'auto'})
+export function validateStoreRanks(raw:unknown):StoreRanks {
+ if(raw===undefined)return {}
+ if(!raw||typeof raw!=='object'||Array.isArray(raw)||Object.getPrototypeOf(raw)!==Object.prototype||Object.keys(raw).length>20)throw new Error('Use platform priorities from 1 to 99, or leave blank.')
+ const ranks:StoreRanks={}
+ for(const [id,rank] of Object.entries(raw)){if(!findStores.includes(id)&&!/^catalogue:[a-z0-9-]{1,40}$/.test(id)||!Number.isInteger(rank)||(rank as number)<1||(rank as number)>99)throw new Error('Use platform priorities from 1 to 99, or leave blank.');ranks[id]=rank as number}
+ return ranks
+}
+export const storePriority=(id:string,ranks:StoreRanks|undefined)=>ranks?.[id]??100
 export function validateSelection(raw:unknown,settings:PackSettings):FindSelection {
  const s=raw as FindSelection
  if(!s||typeof s.category!=='string'||s.category!=='auto'&&!settings.categories.some(c=>c.id===s.category)||![4,5,6].includes(s.size)||!Number.isFinite(s.min)||!Number.isFinite(s.max)||s.min<0||s.max<s.min||s.max>10_000_000||!Array.isArray(s.stores)||s.storeMode!=='auto'&&!s.stores.length||s.stores.length>20||s.stores.some(id=>!findStores.includes(id)&&!/^catalogue:[a-z0-9-]{1,40}$/.test(id))||s.mode!==undefined&&!['auto','custom'].includes(s.mode)||s.storeMode!==undefined&&!['auto','manual'].includes(s.storeMode))throw new Error('Use a valid INR budget, 4–6 products and Auto stores or supported store overrides.')
- return {category:s.category,min:s.min,max:s.max,size:s.size,stores:[...new Set(s.stores)],mode:s.mode??'custom',storeMode:s.storeMode??'manual'}
+ return {category:s.category,min:s.min,max:s.max,size:s.size,stores:[...new Set(s.stores)],mode:s.mode??'custom',storeMode:s.storeMode??'manual',storeRanks:validateStoreRanks(s.storeRanks)}
 }
 export const families = [
  ['short kurtis','tops/T-shirts','casual co-ords','jeans','casual dresses'],
@@ -56,7 +64,7 @@ export function validateSettings(raw:unknown):PackSettings {
  if(!s||![4,5,6].includes(s.size)||!Number.isInteger(s.cooldownDays)||s.cooldownDays<0||s.cooldownDays>365||typeof s.scheduled!=='boolean'||!Array.isArray(s.categories)||!s.categories.length||s.categories.length>60)throw new Error('Invalid pack settings.')
  for(const v of [s.season,s.occasion,s.attributes])if(typeof v!=='string'||v.length>300)throw new Error('Invalid audience preferences.')
  const ids=new Set<string>();for(const c of s.categories){if(!c||typeof c.id!=='string'||ids.has(c.id)||typeof c.name!=='string'||!c.name.trim()||c.name.length>120||!Array.isArray(c.subcategories)||!c.subcategories.length||c.subcategories.some(x=>typeof x!=='string'||!x.trim()||x.length>100)||!Number.isFinite(c.min)||!Number.isFinite(c.max)||c.min<0||c.max<c.min||typeof c.deferred!=='string'||c.deferred.length>300||c.specialist!==undefined&&typeof c.specialist!=='boolean'||c.autoEnabled!==undefined&&typeof c.autoEnabled!=='boolean')throw new Error('Invalid category or budget.');ids.add(c.id)}
- const savedAi=s.ai as any;const ai=!savedAi?{provider:'antigravity',model:'',effort:'medium'}:['ollama','local','hybrid'].includes(typeof savedAi==='string'?savedAi:savedAi.provider)?{provider:'antigravity',model:'',effort:'medium'}:savedAi;if(!['antigravity','none'].includes(ai.provider)||typeof ai.model!=='string'||ai.model.length>100||!['medium','high'].includes(ai.effort))throw new Error('Invalid account reasoning settings.');return {...structuredClone(s),ai:structuredClone(ai)}
+ const savedAi=s.ai as any;const ai=!savedAi?{provider:'antigravity',model:'',effort:'medium'}:['ollama','local','hybrid'].includes(typeof savedAi==='string'?savedAi:savedAi.provider)?{provider:'antigravity',model:'',effort:'medium'}:savedAi;if(!['antigravity','none'].includes(ai.provider)||typeof ai.model!=='string'||ai.model.length>100||!['medium','high'].includes(ai.effort))throw new Error('Invalid account reasoning settings.');return {...structuredClone(s),storeRanks:validateStoreRanks(s.storeRanks),ai:structuredClone(ai)}
 }
 export function matchingPhoto(p:PackProduct):boolean {
  return p.match==='exact'&&p.images.some(i=>{try{return i.variant===p.variant&&canonical(i.source,p.catalogue).id===p.id&&!!publicHttps(i.url)}catch{return false}})
@@ -74,15 +82,19 @@ export function eligible(p:PackProduct,pack:Pick<ReadyPack,'category'|'subcatego
  const family=[p,...store.products.filter(x=>x.id!==p.id&&p.garmentId&&x.retailer===p.retailer&&x.garmentId===p.garmentId)]
  return reviewable(p,pack,now)&&attributeFit&&!exclude.has(p.id)&&!family.some(x=>x.lastUsedAt&&(!Number.isFinite(Date.parse(x.lastUsedAt))||now-Date.parse(x.lastUsedAt)<store.settings.cooldownDays*86400000))&&!store.packs.some(x=>['drafted','exported'].includes(x.state)&&family.some(member=>x.productIds.includes(member.id)))
 }
-export function selectProducts(pool:PackProduct[],count:number):PackProduct[] {
+export function selectProducts(pool:PackProduct[],count:number,options:{storeRanks?:StoreRanks;preferredIds?:string[];retained?:PackProduct[]}={}):PackProduct[] {
  const result:PackProduct[]=[];const ids=new Set<string>(),garments=new Set<string>(),photos=new Set<string>(),titles=new Set<string>()
+ const preference=new Map((options.preferredIds??[]).map((id,index)=>[id,index]))
+ const add=(p:PackProduct)=>{const title=p.title.toLowerCase().replace(/\b(xs|s|m|l|xl|xxl|size|\d+)\b/g,'').replace(/\W/g,'');if(ids.has(p.id)||p.garmentId&&garments.has(p.retailer+':'+p.garmentId)||titles.has(title)||p.images.some(i=>photos.has(i.url)))return;result.push(p);ids.add(p.id);if(p.garmentId)garments.add(p.retailer+':'+p.garmentId);titles.add(title);p.images.forEach(i=>photos.add(i.url))}
+ // Partial retries preserve numbering. Only new additions follow saved store priorities.
+ for(const p of options.retained??[]){if(result.length>=count)break;add(p)}
  const sorted=[...pool].sort((a,b)=>Number(b.stock==='in-stock')-Number(a.stock==='in-stock')||b.images.length-a.images.length)
- while(result.length<count&&sorted.length){sorted.sort((a,b)=>Number(result.some(p=>p.color===a.color&&p.cut===a.cut))-Number(result.some(p=>p.color===b.color&&p.cut===b.cut)));const p=sorted.shift()!;const title=p.title.toLowerCase().replace(/\b(xs|s|m|l|xl|xxl|size|\d+)\b/g,'').replace(/\W/g,'');if(ids.has(p.id)||p.garmentId&&garments.has(p.retailer+':'+p.garmentId)||titles.has(title)||p.images.some(i=>photos.has(i.url)))continue;result.push(p);ids.add(p.id);if(p.garmentId)garments.add(p.retailer+':'+p.garmentId);titles.add(title);p.images.forEach(i=>photos.add(i.url))}
+ while(result.length<count&&sorted.length){sorted.sort((a,b)=>storePriority(a.retailer,options.storeRanks)-storePriority(b.retailer,options.storeRanks)||(preference.get(a.id)??Infinity)-(preference.get(b.id)??Infinity)||Number(result.some(p=>p.color===a.color&&p.cut===a.cut))-Number(result.some(p=>p.color===b.color&&p.cut===b.cut)));add(sorted.shift()!)}
  return result
 }
 export function assemble(store:PackStore,slot:PlanSlot,preferredIds?:string[]):ReadyPack {
- const c=store.settings.categories.find(c=>c.id===slot.category)!;const pack:ReadyPack={id:randomUUID(),slotId:slot.id,theme:slot.subcategory,category:c.id,subcategory:slot.subcategory,min:store.selection?.min??c.min,max:store.selection?.max??c.max,requested:store.selection?.size??store.settings.size,stores:store.selection?.stores,productIds:[],state:'drafted',createdAt:new Date().toISOString(),reasons:[],performance:[],references:[]}
- const qualified=store.products.filter(p=>eligible(p,pack,store));const preferred=preferredIds?.map(id=>qualified.find(p=>p.id===id));if(preferred&&(preferred.some(p=>!p)||preferred.length>pack.requested||selectProducts(preferred as PackProduct[],preferred.length).length!==preferred.length))throw new Error('AI selection failed pack invariants.');const chosen=preferred?preferred as PackProduct[]:selectProducts(qualified,pack.requested);pack.productIds=chosen.map(p=>p.id)
+ const c=store.settings.categories.find(c=>c.id===slot.category)!;const pack:ReadyPack={id:randomUUID(),slotId:slot.id,theme:slot.subcategory,category:c.id,subcategory:slot.subcategory,min:store.selection?.min??c.min,max:store.selection?.max??c.max,requested:store.selection?.size??store.settings.size,stores:store.selection?.stores,storeRanks:structuredClone(store.selection?.storeRanks??store.settings.storeRanks??{}),productIds:[],state:'drafted',createdAt:new Date().toISOString(),reasons:[],performance:[],references:[]}
+ const qualified=store.products.filter(p=>eligible(p,pack,store));const preferred=preferredIds?.map(id=>qualified.find(p=>p.id===id));if(preferred&&(preferred.some(p=>!p)||preferred.length>pack.requested||selectProducts(preferred as PackProduct[],preferred.length).length!==preferred.length))throw new Error('AI selection failed pack invariants.');const chosen=Object.keys(pack.storeRanks??{}).length?selectProducts(qualified,pack.requested,{storeRanks:pack.storeRanks,preferredIds}):preferred?preferred as PackProduct[]:selectProducts(qualified,pack.requested);pack.productIds=chosen.map(p=>p.id)
  pack.theme=`${slot.subcategory} | INR ${pack.min}-${pack.max} | ${store.settings.occasion}`;pack.reasons.push(slot.variation)
  if(chosen.length<pack.requested)pack.reasons.push(`Incomplete: ${chosen.length}/${pack.requested}. Only exact-category listings with observed INR prices inside budget qualify; duplicates, cooldown and active packs excluded.`)
  if(chosen.some(p=>p.stock==='unknown'))pack.reasons.push('Stock unknown for some products; check original listings.')

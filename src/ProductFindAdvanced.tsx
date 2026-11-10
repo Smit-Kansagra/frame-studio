@@ -9,17 +9,18 @@ export function ProductFindAdvanced() {
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('')
   const [keys, setKeys] = useState({ flipkartId: '', flipkartToken: '', imagePermission: '' })
   const [licence, setLicence] = useState(''), [imports, setImports] = useState('')
+  const [ranks, setRanks] = useState<Record<string, string>>({})
   const [catalogue, setCatalogue] = useState<MerchantCatalogue>({ id: 'catalogue:my-store', name: '', kind: 'woocommerce', origin: '', enabled: true, permission: { reference: '', grantedAt: '', expiresAt: null } })
   useEffect(() => {
     if (!api) return
     let alive = true
-    void api.status().then(s => { if (alive) { setState(s); setSettings(s.settings) } }).catch(e => { if (alive) setError(String(e)) })
+    void api.status().then(s => { if (alive) { setState(s); setSettings(s.settings); setRanks(Object.fromEntries(Object.entries(s.settings.storeRanks ?? {}).map(([id, rank]) => [id, String(rank)]))) } }).catch(e => { if (alive) setError(String(e)) })
     return () => { alive = false }
   }, [api])
   async function act(action: PackAction) {
     if (!api) return
     setBusy(true); setError(''); setNotice('')
-    try { await api.action(action); setState(await api.status()); setNotice('Saved.'); if (action.type === 'review') window.location.hash = '#product-find'; if (action.type === 'credentials') setKeys({ flipkartId: '', flipkartToken: '', imagePermission: '' }) }
+    try { await api.action(action); const next = await api.status(); setState(next); if (action.type === 'settings' || action.type === 'store-ranks') setSettings(next.settings); setNotice('Saved.'); if (action.type === 'review') window.location.hash = '#product-find'; if (action.type === 'credentials') setKeys({ flipkartId: '', flipkartToken: '', imagePermission: '' }) }
     catch (e) { setError(e instanceof Error ? e.message : String(e)) }
     finally { setBusy(false) }
   }
@@ -27,6 +28,16 @@ export function ProductFindAdvanced() {
   return <div className="product-find">
     <p>Product Find runs when you click Find. Old YouTube and pack schedules are paused. Saved credentials, products and history remain intact.</p>
     {error && <p role="alert" className="prompt-validation-error">{error}</p>}{notice && <p role="status">{notice}</p>}
+    <details><summary>Platform priority</summary>
+      <p>Set your own numbers: 1 first, 2 next, up to 99. Blank stores come after numbered stores; equal numbers share a priority. These are your preferences, not measured commission rates. No EarnKaro login or automatic affiliate-link conversion is required.</p>
+      <p>Each collection keeps one clothing theme and budget. Take eligible products from the first usable store, then fill remaining places from the next stores. Existing partial results keep their products and numbering. Priority changes apply to new collections.</p>
+      <form onSubmit={e => { e.preventDefault(); void act({ type: 'store-ranks', value: Object.fromEntries(Object.entries(ranks).filter(([, rank]) => rank.trim() !== '').map(([id, rank]) => [id, Number(rank)])) }) }}>
+        <fieldset className="discovery-fields" disabled={locked || !state}>
+          {state?.providers.map(p => <label key={p.id}>{p.name ?? p.id}<input aria-label={(p.name ?? p.id) + ' priority'} type="number" min={1} max={99} step={1} placeholder="Unranked" value={ranks[p.id] ?? ''} onChange={e => setRanks(old => ({ ...old, [p.id]: e.target.value }))} /><small>{p.readiness === 'unsupported' || p.readiness === 'needs-access' ? 'Source access unavailable; ranking does not connect this store.' : p.readiness === 'paused' ? 'Source paused; ranking does not bypass the restriction.' : 'Configured source; live access must still succeed.'}</small></label>)}
+          <button className="button button-secondary" type="submit">Save platform priority</button>
+        </fieldset>
+      </form>
+    </details>
     <details><summary>Store access</summary>
       <p>Auto excludes unconfigured or paused sources. Configuration is separate from confirmed access. No source connection is inferred from a browser login or a saved URL. No purchase is required or suggested.</p>
       {state?.providers.map(p => <div key={p.id}><p><strong>{p.name ?? p.id}</strong>: {p.readiness ?? 'unverified'} · {p.route}<br/>{p.status}<br/>{p.setupAction}</p>{(state?.sourceHealth?.[p.id] || state?.products.some(product => product.retailer === p.id && product.photoFailure)) && <button className="button button-secondary" disabled={locked} onClick={() => void act({ type: 'source-recheck', productId: p.id })}>Allow next explicit search to recheck {p.name ?? p.id}</button>}</div>)}

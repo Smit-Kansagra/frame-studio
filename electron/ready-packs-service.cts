@@ -5,7 +5,7 @@ import { commissionEstimate } from './ready-packs-ai.cjs'
 import type { PackAdvice, FindSelection, PlanSlot } from './ready-packs-types.cjs'
 import { applyLicences } from './ready-packs-licences.cjs'
 import { discoveryDiagnostics, reject } from './ready-packs-diagnostics.cjs'
-import { PackRepository, assemble, canonical, defaultFindSelection, eligible, matchingPhoto, photoReady, reviewable, selectProducts, validateSelection, validateSettings } from './ready-packs-core.cjs'
+import { PackRepository, assemble, canonical, defaultFindSelection, eligible, matchingPhoto, photoReady, reviewable, selectProducts, storePriority, validateSelection, validateSettings, validateStoreRanks } from './ready-packs-core.cjs'
 import { classify, importProducts } from './ready-packs-providers.cjs'
 import type { Provider } from './ready-packs-providers.cjs'
 import type { PackStore, PackProduct, Performance, ReadyPack } from './ready-packs-types.cjs'
@@ -39,6 +39,7 @@ export class PackService {
  queue(){return this.state.packs.filter(p=>p.productIds.length&&(p.state==='drafted'||p.state==='exported'))}
  pack(id:string){const p=this.state.packs.find(p=>p.id===id);if(!p)throw new Error('Pack not found.');return p}
  async preferences(value:unknown){await this.mutate(async()=>{this.state.preferences=validateSelection(value,this.state.settings)})}
+ async storeRanks(value:unknown){await this.mutate(async()=>{this.state.settings.storeRanks=validateStoreRanks(value)})}
  async catalogue(value:unknown){await this.mutate(async()=>{const c=validateCatalogue(value);if((this.state.catalogues??[]).some(x=>x.id!==c.id&&x.origin===c.origin))throw new Error('A source for this origin already exists; edit it instead.');if((this.state.catalogues??[]).filter(x=>x.id!==c.id).length>=8)throw new Error('Up to eight authorized store sources are supported.');this.state.catalogues=[...(this.state.catalogues??[]).filter(x=>x.id!==c.id),c];if(this.state.sourceHealth)delete this.state.sourceHealth[c.id];this.cache.clear()})}
  async recheckSource(id:string){await this.mutate(async()=>{if(!(await this.providers()).some(p=>p.status.id===id))throw new Error('Unknown source.');if(this.state.sourceHealth)delete this.state.sourceHealth[id];for(const p of this.state.products.filter(p=>p.retailer===id)){p.photoFailure=undefined;p.failures=p.failures.filter(f=>!f.startsWith('Photo verification failed:'))}this.state.actionableError=undefined;this.cache.clear()})}
  async generate(_manual=true){return this.next()}
@@ -57,7 +58,8 @@ export class PackService {
   try{
    if(!more)this.state.preferences=preferences
    const providers=await this.providers(),ready=providers.filter(p=>sourceReady(p,this.state));this.state.providers=providers.map(p=>sourceStatus(p,this.state))
-   const selection:FindSelection={...preferences,stores:more||preferences.storeMode!=='auto'?preferences.stores:ready.map(p=>p.status.id)}
+   const selection:FindSelection={...preferences,storeRanks:structuredClone(more?preferences.storeRanks??{}:this.state.settings.storeRanks??{}),stores:more||preferences.storeMode!=='auto'?preferences.stores:ready.map(p=>p.status.id)}
+   selection.stores.sort((a,b)=>storePriority(a,selection.storeRanks)-storePriority(b,selection.storeRanks))
    const usable=ready.filter(p=>selection.stores.includes(p.status.id))
    if(!usable.length){
     const paused=providers.some(p=>this.state.sourceHealth?.[p.status.id]?.state==='blocked')
@@ -119,7 +121,7 @@ export class PackService {
  const session=this.state.searchSession!
  const errors:string[]=[];let resultCount=0,inventoryAccessible=false,usedReasoning=false,photoAccessFailed=false
  try{
- const providers=(await this.providers()).filter(p=>selection.stores.includes(p.status.id)&&sourceReady(p,this.state))
+ const providers=(await this.providers()).filter(p=>selection.stores.includes(p.status.id)&&sourceReady(p,this.state)).sort((a,b)=>storePriority(a.status.id,selection.storeRanks)-storePriority(b.status.id,selection.storeRanks))
  const definition=this.state.settings.categories.find(c=>c.id===slot.category);if(!definition||definition.deferred)throw new Error('Saved category is unavailable or deferred. Choose clothes again.');const category={...definition,min:selection.min,max:selection.max}
  const queries=themeQueries(slot,this.state.settings.season,this.state.settings.occasion);const query=queries[0]
  const reports=providers.map(p=>{p.diagnostics??=discoveryDiagnostics(p.status.id+': '+query);p.diagnostics.query=p.status.id+': '+queries.join(' | ');return p.diagnostics});this.state.diagnostics=[...(this.state.diagnostics??[]),...reports].slice(-16)
@@ -150,10 +152,13 @@ export class PackService {
  })
  this.merge([...pools.values()].flat());signal.throwIfAborted()
  // Include retained candidates only from selected platforms. Imports are an optional fallback.
- const pool=[...pools.values()].flat();const retained=this.state.products.filter(p=>selection.stores.includes(p.retailer)&&(!p.category||p.category===slot.category)).slice(-30)
+ const pool=providers.flatMap(p=>pools.get(p.status.id)??[]);const retained=this.state.products.filter(p=>selection.stores.includes(p.retailer)&&(!p.category||p.category===slot.category)).slice(-30)
  const currentIds=session.packId?this.pack(session.packId).productIds:[]
  const currentProducts=this.state.products.filter(p=>currentIds.includes(p.id)&&selection.stores.includes(p.retailer))
- const unique=[...new Map([...currentProducts,...pool,...retained].map(p=>[p.id,p])).values()].slice(0,30).map(p=>this.state.products.find(saved=>saved.id===p.id)??p)
+ // Known mismatches never crowd out lower-priority matching inventory in the bounded pool.
+ const possible=(p:PackProduct)=>(!p.category||p.category===slot.category)&&(!p.subcategory||p.subcategory===slot.subcategory)&&(p.price===null||p.currency!=='INR'||p.price>=selection.min&&p.price<=selection.max)&&p.stock!=='out-of-stock'
+ const candidates=[...new Map([...pool,...retained].filter(possible).map(p=>[p.id,p])).values()].sort((a,b)=>storePriority(a.retailer,selection.storeRanks)-storePriority(b.retailer,selection.storeRanks))
+ const unique=[...new Map([...currentProducts,...candidates].map(p=>[p.id,p])).values()].slice(0,30).map(p=>this.state.products.find(saved=>saved.id===p.id)??p)
  const verified:PackProduct[]=[]
  await workers(unique,3,signal,async original=>{
   let p=structuredClone(original);const provider=providers.find(x=>x.status.id===p.retailer);const d=provider?.diagnostics
@@ -205,26 +210,27 @@ export class PackService {
  if(existing&&replacement){
   const index=existing.productIds.indexOf(replacement)
   const current=this.state.products.filter(p=>existing.productIds.includes(p.id)&&p.id!==replacement)
-  const alternative=selectProducts(this.state.products.filter(p=>candidateIds.has(p.id)&&eligible(p,existing,this.state,new Set(existing.productIds))),30).find(p=>selectProducts([...current,p],current.length+1).length===current.length+1)
+  const alternative=selectProducts(this.state.products.filter(p=>candidateIds.has(p.id)&&eligible(p,existing,this.state,new Set(existing.productIds))),current.length+1,{retained:current,storeRanks:existing.storeRanks}).find(p=>!current.some(x=>x.id===p.id))
   if(index>=0&&alternative){const old=this.state.products.find(p=>p.id===replacement)!;old.state='skipped';alternative.state='drafted';alternative.lastUsedAt=new Date().toISOString();existing.productIds[index]=alternative.id;existing.state='drafted';existing.ai=undefined}
   else errors.push('No verified same-theme replacement found. Current result kept; no filters relaxed.')
  }else if(existing){
   const retained=existing.productIds.map(id=>this.state.products.find(p=>p.id===id)).filter((p):p is PackProduct=>!!p&&reviewable(p,existing))
   const available=this.state.products.filter(p=>candidateIds.has(p.id)&&eligible(p,existing,this.state,new Set(existing.productIds)))
-  const selected=[...retained];for(const p of available){if(selected.length>=existing.requested)break;if(selectProducts([...selected,p],selected.length+1).length===selected.length+1)selected.push(p)}
+  const selected=selectProducts(available,existing.requested,{retained,storeRanks:existing.storeRanks})
   const keep=new Set(retained.map(p=>p.id))
   existing.productIds=selected.map(p=>p.id);existing.state='drafted';existing.reasons=[];existing.ai=undefined
   for(const p of selected){if(!keep.has(p.id))p.lastUsedAt=new Date().toISOString();p.state='drafted'}
  }else{
   const assembly=structuredClone(this.state);assembly.selection=selection;assembly.products=assembly.products.filter(p=>candidateIds.has(p.id));assembly.settings.size=selection.size;assembly.settings.categories=assembly.settings.categories.map(c=>c.id===category.id?category:c)
   const created=assemble(assembly,slot,advice?.selection.map(p=>p.id))
-  if(created.productIds.length){pack=created;if(advice)pack.ai=advice;this.state.packs.push(pack);for(const id of pack.productIds){const p=this.state.products.find(p=>p.id===id)!;p.state='drafted';p.lastUsedAt=pack.createdAt}session.packId=pack.id}
+  if(created.productIds.length){pack=created;if(advice)pack.ai={...advice,selection:advice.selection.filter(row=>created.productIds.includes(row.id))};this.state.packs.push(pack);for(const id of pack.productIds){const p=this.state.products.find(p=>p.id===id)!;p.state='drafted';p.lastUsedAt=pack.createdAt}session.packId=pack.id}
  }
  const count=pack?.productIds.filter(id=>{const p=this.state.products.find(p=>p.id===id);return !!p&&reviewable(p,pack!)}).length??0;resultCount=count
  if(pack&&!count){pack.state='skipped';pack.reasons.push('No currently verified products; history retained. Theme remains available.');session.packId=null;pack=null}
  if(pack)pack.reasons.push(session.themeReason??'Editorial exploration; no measured trend claim.')
  if(pack&&count<selection.size)pack.reasons=[session.themeReason??'Editorial exploration; no measured trend claim.',`Partial result: ${count}/${selection.size}. Find more keeps these clothes, stores and budget.`,...errors]
  else if(pack)pack.reasons=[session.themeReason??'Editorial exploration; no measured trend claim.',...errors]
+ if(pack&&Object.keys(pack.storeRanks??{}).length)pack.reasons.push('Manual store priority: '+[...new Set(pack.productIds.map(id=>this.state.products.find(p=>p.id===id)!.retailer))].map(id=>id+' ('+pack!.productIds.filter(productId=>this.state.products.find(p=>p.id===productId)!.retailer===id).length+')').join(', ')+'. Original links only; create EarnKaro links yourself. No commission rates were fetched or inferred.')
  const planned=this.state.plan.find(s=>s.id===slot.id);if(planned){planned.state=count>=selection.size?'drafted':'pending';if(count>=selection.size){planned.category=slot.category;planned.subcategory=slot.subcategory;planned.reason=slot.reason}}
  for(const provider of providers)if(provider.diagnostics)provider.diagnostics.counts.packCandidates=this.state.products.filter(p=>p.retailer===provider.status.id&&reviewable(p,{category:slot.category,subcategory:slot.subcategory,min:selection.min,max:selection.max,stores:selection.stores})).length
  for(const provider of providers){const reasons=[...new Set(provider.diagnostics?.rejections.map(r=>r.reason)??[])].slice(0,2);if(reasons.length)errors.push(provider.status.id+': '+reasons.join(' '))}
@@ -241,7 +247,7 @@ export class PackService {
  async review(id:string){await this.mutate(async()=>{
   const pack=this.pack(id)
   const stores=pack.stores??[...new Set(['meesho','flipkart','amazon','myntra','ajio',...this.state.products.filter(p=>pack.productIds.includes(p.id)).map(p=>p.retailer)])]
-  const selection:FindSelection={category:pack.category,min:pack.min,max:pack.max,size:pack.requested,stores}
+  const selection:FindSelection={category:pack.category,min:pack.min,max:pack.max,size:pack.requested,stores,storeRanks:structuredClone(pack.storeRanks??{})}
   const slot:PlanSlot={id:pack.slotId,week:1,day:1,category:pack.category,subcategory:pack.subcategory,variation:'Saved result',state:'pending',reason:''}
   this.state.selection=selection;this.state.searchSession={selection,slot,packId:pack.id,messages:[]}
  })}
@@ -253,11 +259,10 @@ export class PackService {
   await this.mutate(async()=>{
    const pack=this.pack(id);if(!['drafted','exported'].includes(pack.state))throw new Error('Only unconsumed results can change.')
    const index=pack.productIds.indexOf(productId);if(index<0)throw new Error('Product not in result.')
-   const alternatives=selectProducts(this.state.products.filter(p=>eligible(p,pack,this.state,new Set(pack.productIds))),30)
    const current=this.state.products.filter(p=>pack.productIds.includes(p.id)&&p.id!==productId)
-   const chosen=alternatives.find(p=>selectProducts([...current,p],current.length+1).length===current.length+1)
+   const chosen=selectProducts(this.state.products.filter(p=>eligible(p,pack,this.state,new Set(pack.productIds))),current.length+1,{retained:current,storeRanks:pack.storeRanks}).find(p=>!current.some(x=>x.id===p.id))
    if(chosen){const old=this.state.products.find(p=>p.id===productId)!;old.state='skipped';chosen.state='drafted';chosen.lastUsedAt=new Date().toISOString();pack.productIds[index]=chosen.id;pack.state='drafted';pack.ai=undefined;pack.reasons.push('Replaced with a verified same-theme alternative. Earlier export is superseded.');return}
-   selection={category:pack.category,min:pack.min,max:pack.max,size:pack.requested,stores:pack.stores??['meesho','flipkart','amazon','myntra','ajio']}
+   selection={category:pack.category,min:pack.min,max:pack.max,size:pack.requested,stores:pack.stores??['meesho','flipkart','amazon','myntra','ajio'],storeRanks:structuredClone(pack.storeRanks??{})}
    const slot:PlanSlot={...(this.state.plan.find(s=>s.id===pack.slotId)??{id:pack.slotId,week:1,day:1,variation:'Replacement',state:'pending' as const,reason:''}),category:pack.category,subcategory:pack.subcategory}
    this.state.searchSession={selection,slot,packId:pack.id,messages:[]}
   })

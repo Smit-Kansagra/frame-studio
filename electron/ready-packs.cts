@@ -34,6 +34,7 @@ export function registerReadyPacks(folder:string,authorized:(e:IpcMainInvokeEven
  case'generate':return service.generate()
  case'next':return service.next(action.value,action.packId)
  case'preferences':return service.preferences(action.value)
+ case'store-ranks':return service.storeRanks(action.value)
  case'catalogue':return service.catalogue(action.value)
  case'source-recheck':return service.recheckSource(action.productId??'')
  case'find':return service.find(action.value)
