@@ -1,4 +1,6 @@
 import { wooCatalogueProvider } from './ready-packs-catalogue.cjs'
+import { ProductBrowser, browserProvider, browserStores } from './product-browser.cjs'
+import { prepareProductExtension } from './product-extension.cjs'
 import type { Provider } from './ready-packs-providers.cjs'
 import { accountReasoner } from './antigravity-account.cjs'
 import { reasonPack } from './ready-packs-ai.cjs'
@@ -18,17 +20,23 @@ import { allowDiscoveryImages } from './product-find.cjs'
 import type { PackAction } from './ready-packs-types.cjs'
 export function registerReadyPacks(folder:string,authorized:(e:IpcMainInvokeEvent)=>boolean){
  const keysFile=path.join(folder,'pack-keys.bin');let closing=false
+ const extensionReady=prepareProductExtension(app.getPath('userData'),app.isPackaged?path.join(process.resourcesPath,'product-finder'):path.resolve(__dirname,'../extension-product-finder')).then(folder=>({folder,error:''})).catch(error=>({folder:'',error:error instanceof Error?error.message:'Product Finder files could not be updated.'}))
+ async function productExtensionFolder(){const ready=await extensionReady;if(ready.error)throw new Error(ready.error);return ready.folder}
+ const browser=new ProductBrowser()
  async function keys():Promise<Keys>{try{return JSON.parse(safeStorage.decryptString(await readFile(keysFile)))}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return{flipkartId:'',flipkartToken:'',imagePermission:''};throw new Error('Pack credentials could not be unlocked; existing file preserved.')}}
  const service:PackService=new PackService(new PackRepository(folder),async()=>{
   let k:Keys={flipkartId:'',flipkartToken:'',imagePermission:''},keyError=''
   try{k=await keys()}catch{keyError='Saved Flipkart credentials could not be unlocked; file preserved. Other sources remain available.'}
-  const flipkart=flipkartProvider(k);if(keyError)flipkart.status.status=keyError
+  const flipkart=k.flipkartId&&k.flipkartToken?flipkartProvider(k):browserProvider('flipkart',browser,service.state?.licences??[]);if(keyError)flipkart.status.status=keyError
   const catalogues=(service.state?.catalogues??[]).map((c):Provider=>{try{return wooCatalogueProvider(c)}catch{return{status:{id:c.id,name:c.name,status:'Catalogue configuration is invalid; saved data preserved.',readiness:'needs-access',route:'WooCommerce Store API',setupAction:'Review saved catalogue scope in Settings.',capabilities:{search:false,details:false,images:false,evidence:false}}}}})
-  return[flipkart,libasProvider(service.state?.licences??[],discoveryDiagnostics('libas: selected theme')),...catalogues,...['myntra','meesho','amazon','ajio'].map((id):Provider=>({status:{id,status:'No authorized automatic collection route configured. A browser login or original link does not establish catalogue access.',readiness:'unsupported',route:'None configured',setupAction:'No connected source for this marketplace. It is excluded from Auto; do not purchase API or proxy access.',capabilities:{search:false,details:false,images:false,stock:false,sizes:false,evidence:false,affiliate:false}}}))]
+  return[flipkart,libasProvider(service.state?.licences??[],discoveryDiagnostics('libas: selected theme')),...catalogues,...['myntra','meesho','amazon','ajio'].map(id=>browserProvider(id,browser,service.state?.licences??[]))]
  },(store,slot,signal)=>reasonPack(folder,store,slot,signal))
- ipcMain.handle('ready-packs:status',async e=>{if(!authorized(e))throw new Error('Unauthorized pack request.');const s=await service.status();s.aiStatus=structuredClone(accountReasoner(folder).status);allowDiscoveryImages(s.products.flatMap(p=>p.images.map(i=>i.url)));return s})
+ ipcMain.handle('ready-packs:status',async e=>{if(!authorized(e))throw new Error('Unauthorized pack request.');const s=await service.status();s.browserStatus=browser.status();s.aiStatus=structuredClone(accountReasoner(folder).status);allowDiscoveryImages(s.products.flatMap(p=>p.images.map(i=>i.url)));return s})
  ipcMain.handle('ready-packs:action',async(e,action:PackAction)=>{if(closing||!authorized(e)||!action||typeof action.type!=='string')throw new Error('Unauthorized request or application is closing.');await service.ready;const id=action.packId??''
  switch(action.type){
+ case'browser-folder':{const result=await shell.openPath(await productExtensionFolder());if(result)throw new Error(result);return}
+ case'browser-pair':{await productExtensionFolder();await service.mutate(async()=>{for(const id of Object.keys(browserStores))if(service.state.sourceHealth)delete service.state.sourceHealth[id]});return browser.pair()}
+ case'browser-disconnect':{await service.cancel();return browser.close()}
  case'ai-test':{if(service.busy)throw new Error('Wait for product search to finish before testing the account.');const account=accountReasoner(folder);await account.json('Connection test only. No tools. Return {"connected":true}.',{type:'object',additionalProperties:false,properties:{connected:{type:'boolean',enum:[true]}},required:['connected']},AbortSignal.timeout(100000),{model:service.state.settings.ai?.model??'',effort:'medium',recheck:true});return}
  case'licence':return service.mutate(async()=>{const licence=validateLicence(action.value);const licences=service.state.licences??[];service.state.licences=[...licences.filter(l=>l.id!==licence.id),licence];if(service.state.sourceHealth)delete service.state.sourceHealth[licence.provider]})
  case'generate':return service.generate()
@@ -58,5 +66,5 @@ export function registerReadyPacks(folder:string,authorized:(e:IpcMainInvokeEven
  default:throw new Error('Unknown pack action.')
  }})
  // Main owns shutdown ordering; do not race its workspace/Flow cleanup with another app.quit().
- return async()=>{closing=true;await service.cancel()}
+ return async()=>{closing=true;await service.cancel();await browser.close();await extensionReady}
 }

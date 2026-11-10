@@ -1,7 +1,9 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Frame Studio Companion</title><link rel="stylesheet" href="popup.css"></head>
-<body><h1>Frame Studio</h1><p id="version" class="note"></p><p>Open your signed-in Flow workspace and connect Frame Studio.</p>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Flow Bridge</title><link rel="icon" type="image/png" href="icons/icon-32.png"><link rel="stylesheet" href="popup.css"></head>
+<body><header class="brand"><img src="icons/icon-48.png" width="48" height="48" alt=""><div><h1>Flow Bridge</h1><p id="version" class="note"></p></div></header><p>Open your signed-in Flow workspace and connect Frame Studio.</p>
 <label for="code">Pairing code from Frame Studio Settings</label><input id="code" type="password" autocomplete="off" spellcheck="false" placeholder="port.pairing-code">
 <p class="note">Generate in Frame Studio opens a separate Flow tab for each project. Prompts, photos and results stay linked to that project. Downloads are used only for requested results. No password or cookie access.</p>
 <button id="connect">Connect this Flow tab</button><button id="disconnect">Disconnect</button>
 <p class="note">Upload trouble? Save the prompt toolbar structure for diagnosis. This does not upload photos or click Generate.</p>
-<button id="diagnostic">Save upload diagnostic</button><p id="status" role="status"></p><script src="popup.js"></script></body></html>
+<button id="diagnostic">Save upload diagnostic</button><p id="status" role="status"></p>
+<p class="note">Shopping collection uses the separate Product Finder extension. Pair its Product Find code there.</p>
+<script src="popup.js"></script></body></html>

@@ -8,13 +8,13 @@ export function sourceReady(p:Provider,store:PackStore):boolean {
 export function sourceStatus(p:Provider,store:PackStore):ProviderStatus {
  const h=store.sourceHealth?.[p.status.id]
  if(!p.search||!p.details||p.status.readiness==='needs-access'||p.status.readiness==='unsupported')return {...p.status,lastSuccessfulAt:h?.lastSuccessfulAt??null}
- if(h?.state==='blocked'||h?.state==='error'&&!!h.retryAt&&Date.parse(h.retryAt)>Date.now())return {...p.status,readiness:'paused',status:h.message,lastSuccessfulAt:h.lastSuccessfulAt,setupAction:'Review the source restriction in Settings. Recheck is explicit; no blocked request is repeated automatically.'}
+ if(h?.state==='blocked'||h?.state==='error'&&!!h.retryAt&&Date.parse(h.retryAt)>Date.now())return {...p.status,readiness:'paused',status:h.message,lastSuccessfulAt:h.lastSuccessfulAt,setupAction:/Frame with ID .*error page|navigation did not finish|page failed:/i.test(h.message)?'Chrome could not read this page. Inspect the failed collection tab for its actual browser error. Category/budget changes do not fix navigation. Recheck only after addressing that error.':'Collection is paused after this failure. Recheck is explicit; it does not itself repair blocked access or missing listing proof.'}
  return {...p.status,...h?.state==='accessible'?{readiness:'accessible' as const,lastSuccessfulAt:h.lastSuccessfulAt,status:'Catalogue was accessible at '+h.lastSuccessfulAt+'. Listing facts still require per-product checks.'}:{}}
 }
 export function recordSource(store:PackStore,id:string,error?:string):void {
  const now=new Date().toISOString(),previous=store.sourceHealth?.[id]
  store.sourceHealth??={}
- const blocked=!!error&&/HTTP (401|403|404)|challenge|captcha|login|permission|outside.*scope|unsupported.*response/i.test(error)
+ const blocked=!!error&&/HTTP (401|403|404)|access denied|request blocked|challenge|captcha|sign.in|login|permission|outside.*scope|unsupported.*response/i.test(error)
  store.sourceHealth[id]=error?{state:blocked?'blocked':'error',message:error,attemptedAt:now,lastSuccessfulAt:previous?.lastSuccessfulAt??null,retryAt:blocked?null:new Date(Date.now()+(/429/.test(error)?3600000:15*60000)).toISOString()}:{state:'accessible',message:'Catalogue request succeeded; individual products may still fail verification.',attemptedAt:now,lastSuccessfulAt:now,retryAt:null}
 }
 

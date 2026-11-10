@@ -1,6 +1,6 @@
 {
   "name": "frame-studio",
-  "version": "0.13.0-preview.50",
+  "version": "0.13.0-preview.54",
   "private": true,
   "description": "A personal Windows studio for product photos, posts, and reels.",
   "type": "module",
@@ -76,8 +76,15 @@
           "*.js",
           "*.html",
           "*.css",
+          "icons/*.png",
+          "icon.svg",
           "README.md"
         ]
+      },
+      {
+        "from": "extension-product-finder",
+        "to": "product-finder",
+        "filter": ["*.json", "*.js", "*.html", "*.css", "icons/*.png", "icon.svg", "README.md"]
       },
       {
         "from": "electron/flow-native-submit.ps1",

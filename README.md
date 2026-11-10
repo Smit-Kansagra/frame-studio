@@ -2,7 +2,11 @@
 
 A Windows desktop studio for turning product photos into social media posts and reels. Organize products, reusable themes, and character references locally; generate media through your own Google Flow session; review results and export approved images or videos.
 
-**Current version:** `0.13.0-preview.49` (preview).
+**Current version:** `0.13.0-preview.54` (preview).
+
+Chrome connections now have separate names and icons: **Flow Bridge** (blue bridge/play) handles Google Flow; **Product Finder** (purple clothing/search) handles Product Find. Settings opens the correct extension folder for each connection. Reload the existing Flow companion as Flow Bridge, then load Product Finder once from its separate folder and pair its Product Find code. Saved app data and Flow's page adapter remain unchanged. Retailer collection is still unverified; no runtime/browser/model tests were run for this branding revision.
+
+Preview.54 prepares Product Finder in the permanent `%APPDATA%\Frame Studio\browser-extensions\product-finder` folder. Use the Settings folder button to load that path once. After software updates, finish/cancel collection and click **Refresh extension** in its popup or Chrome's **Reload**; do not load each version's `release` directory again. Pairing after a refresh/restart remains separate. Existing users who loaded a versioned folder need one switch to the permanent path.
 
 Frame Studio is an independent personal project and is not affiliated with Google. Google Flow requires internet and an eligible account. Local libraries, image processing, review, and export work offline once the required tools are installed.
 

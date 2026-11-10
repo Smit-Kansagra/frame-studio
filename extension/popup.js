@@ -1,5 +1,5 @@
 const status = document.querySelector('#status')
-document.querySelector('#version').textContent = `Flow Companion ${chrome.runtime.getManifest().version_name || chrome.runtime.getManifest().version}`
+document.querySelector('#version').textContent = `Frame Studio · ${chrome.runtime.getManifest().version_name || chrome.runtime.getManifest().version}`
 document.querySelector('#connect').addEventListener('click', async () => {
   const button = document.querySelector('#connect'); button.disabled = true
   try {
@@ -20,3 +20,4 @@ document.querySelector('#diagnostic').addEventListener('click', async () => {
     status.textContent = result?.message || 'Could not save diagnostic.'
   } catch (error) { status.textContent = error.message } finally { button.disabled = false }
 })
+

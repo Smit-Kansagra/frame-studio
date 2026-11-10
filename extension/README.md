@@ -1,6 +1,39 @@
-# Frame Studio Flow Companion
+# Flow Bridge
 
-Current app: 0.13.0-preview.45. Current adapter: 0.1.6-fast.24.
+## Current setup: preview.53
+
+Flow Bridge 0.1.9 is the blue bridge/play extension for Google Flow. It keeps the existing Flow worker, page adapter (`0.1.6-fast.24`), local pairing protocol, project lanes and download handling. The popup title, favicon, toolbar and extension-manager icons now use the new identity. This is an independent Frame Studio extension, not an official Google product.
+
+Product collection now uses **Product Finder 0.1.0**, a separate purple clothing/search extension. It retains the existing collector and restrictions; no new retailer access is claimed. In Settings / Product Find / Advanced click **Open Product Finder folder**, load that folder once in Chrome, then pair using the Product Find code. See `../extension-product-finder/README.md` in source or the packaged `resources/product-finder/README.md`.
+
+For Google Flow, use **Settings / Connect Flow / Open Flow Bridge folder**, then reload the existing companion from that same folder or load it unpacked. Its existing folder and app resource name (`flow-companion`) stay stable to preserve an already-loaded extension's identity. Refresh the Flow tab and pair again if needed. No saved app data, Google session, credentials or Chrome extensions are deleted or installed automatically. Product Finder asks separately for selected shopping-site permissions.
+
+Editable artwork is `icon.svg`; `node scripts/build-extension-icons.mjs` renders bundled PNG icons. Both popup and toolbar use those files. Runtime, browser and model tests were not run, per owner instruction. Retailer source access and real-pack export remain pending manual testing.
+
+## Historical combined-companion notes (preview.52)
+
+The section below describes the prior combined extension. For preview.53, use the two separate folders and names above; Product Find is no longer in the Flow popup.
+
+Current app: 0.13.0-preview.52. Extension: 0.1.8-products.2. The existing Flow page adapter remains 0.1.6-fast.24; its origin restrictions, account handling and project lanes are unchanged.
+
+## Product Find Chrome setup
+
+1. Open **Settings / Product Find / Advanced / Chrome product collection** in the new app. Click **Open companion folder**.
+2. In Chrome open `chrome://extensions`, enable Developer mode, click **Load unpacked**, and select that folder. If the companion is already loaded, change/reload it from the new installer folder rather than leaving the old version active. Confirm extension `0.1.8-products.2`.
+3. Keep a normal Chrome window open. In the app click **Create Product Find code**. Codes are local, single use and expire after five minutes.
+4. Open the extension popup. Use its separate **Product Find** section. Select sites, paste the Product Find code, then click **Allow sites and connect Product Find**. Approve only the requested sites in Chrome. Do not paste this code into the Flow section.
+5. Return to Product Find, save platform numbers in **Platform priority** if needed, and click **Find my next post**. No EarnKaro, affiliate link creation, paid API, proxy or AI browser permissions are used by collection.
+6. Install the extension once; pair again when Chrome or Frame Studio restarts. A browser restart/disconnection keeps saved candidates and packs. Nothing collects while the app is closed.
+
+The extension creates only its own bounded collection tabs. It reads public rendered product links and JSON-LD; the Myntra detail reader can also read the listing's product code, current PDP price, main gallery and explicit specifications. It never clicks buy/cart, signs in, solves CAPTCHA, reads cookies/storage, calls private retailer APIs or returns arbitrary HTML/account data. Flow uses a separate connection and unchanged scope.
+
+Preview.52 follows owner-reported failures. Flipkart search reached real records, but eight observed INR-priced listings with photos all failed exact variant binding; colour names were present, so missing colour alone was not the cause. The updated reader can bind a Product by its supplied exact URL or SKU/productID before associating its images with the requested PID. It also reads allowlisted public specification-table fields, including Length Type; no short/long category is inferred when length is missing. An Auto-only fallback can use newly verified inventory within the existing two-theme bound. Manual category and budget never change.
+
+The owner also reported Chrome's `Frame with ID 0 is showing error page` for Myntra/Meesho. That proves a Chrome page/read failure, not a confirmed DNS, SSL, access-control or selector cause. New code never injects after a navigation timeout, includes store/stage/requested URL in failure context, and leaves a failed collection tab open for manual inspection. It does not bypass or automatically retry a failed page. Successful and cancelled job tabs still close safely. These changes are source-reviewed, not a claim that those browser failures are resolved.
+
+Myntra, Meesho and Flipkart browser routes become **configured, unverified** after pairing. Existing approved Flipkart API access still takes precedence if already configured. Amazon and AJIO readers are implemented but automatic collection remains disabled without a genuine existing scoped merchant research grant; Chrome permission does not override their restrictions. Shared JSON-LD-only readers cannot manufacture missing variant facts. Partial/unknown candidates are retained but do not qualify for cards until all required checks pass. A site change or access block may require a reader fix; pairing is not proof of live compatibility.
+
+Image export needs the existing real reuse permission checks. Chrome access does not grant that permission. This revision was source-reviewed only; no extension/browser/model/fixture tests were run at the owner's request. The owner must verify actual discovery, replacement and export. The app is not automatically installed or launched by packaging.
 
 ## Install and connect
 

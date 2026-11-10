@@ -75,6 +75,8 @@ export function photoReady(p:PackProduct,now=Date.now()):boolean {
 }
 export function reviewable(p:PackProduct,pack:Pick<ReadyPack,'category'|'subcategory'|'min'|'max'|'stores'>,now=Date.now()):boolean {
  try{if(canonical(p.url,p.catalogue).id!==p.id)return false}catch{return false}
+ const gender=Object.entries(p.listingAttributes??{}).find(([key])=>/^(?:gender|ideal for)$/i.test(key))?.[1]
+ if(gender&&/\b(?:men|man|boys|boy)\b/i.test(gender)&&!(/\b(?:women|woman|unisex)\b/i.test(gender)))return false
  return (!pack.stores||pack.stores.includes(p.retailer))&&!/\b(men|boys|boy)\b/i.test(p.title)&&p.category===pack.category&&p.subcategory===pack.subcategory&&!!p.title.trim()&&matchingPhoto(p)&&photoReady(p,now)&&!!p.observedAt&&Number.isFinite(Date.parse(p.observedAt))&&Date.parse(p.observedAt)<=now&&now-Date.parse(p.observedAt)<=6*3600000&&p.price!==null&&p.currency==='INR'&&p.price>=pack.min&&p.price<=pack.max&&p.stock!=='out-of-stock'&&!p.failures.some(f=>f.startsWith('Revalidation failed:')||f.startsWith('Photo verification failed:')||f==='Listing reports not purchasable.')
 }
 export function eligible(p:PackProduct,pack:Pick<ReadyPack,'category'|'subcategory'|'min'|'max'|'stores'>,store:PackStore,exclude=new Set<string>(),now=Date.now()):boolean {

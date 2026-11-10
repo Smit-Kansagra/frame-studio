@@ -63,7 +63,7 @@ export class PackService {
    const usable=ready.filter(p=>selection.stores.includes(p.status.id))
    if(!usable.length){
     const paused=providers.some(p=>this.state.sourceHealth?.[p.status.id]?.state==='blocked')
-    const reason=paused?'Previously blocked source access is paused. Review its restriction in Settings before an explicit recheck.':'No permitted automatic catalogue source is configured. Existing browser companion supports Flow only; opening a retailer website does not connect it. Optional existing merchant/API access is managed in Settings. No purchase or paid access is required or suggested.'
+    const reason=paused?'Previously blocked source access is paused. Review its restriction in Settings before an explicit recheck.':'Pair Chrome in Settings / Product Find / Chrome product collection for this app session. Allow the shopping sites in the companion, then click Find my next post. Opening a website alone does not pair it. No paid API or affiliate-link conversion is required.'
     this.state.actionableError={code:paused?'source-blocked':'source-setup',message:reason,action:'Review Product Find source access in Settings'}
     this.state.job={state:'error',message:'Product source setup required',dueAt:new Date().toISOString(),attempts:0}
     await this.repository.save(this.state);return
@@ -79,6 +79,10 @@ export class PackService {
     try{
      for(let index=0;index<themes.length;index++){
       signal.throwIfAborted()
+      // After a genuine inventory miss, reconsider the one allowed Auto fallback
+      // using newly verified inventory. Manual categories and access failures do
+      // not reach this branch; the previous collection decides canFallback.
+      if(index===1&&selection.category==='auto'&&!more){const previous=themes[0].slot;const fresh=nextThemes(this.state,selection).find(row=>row.slot.category!==previous.category||row.slot.subcategory!==previous.subcategory);if(fresh)themes[index]=fresh}
       const {slot,reason}=themes[index];slot.variation='Saved budget; no hidden budget variation'
       this.state.selection=selection
       if(!more)this.state.searchSession={selection:structuredClone(selection),slot,packId:null,messages:[],themeReason:(index?'Previous theme had no qualifying inventory from an accessible source. ':'')+reason}
@@ -138,16 +142,16 @@ export class PackService {
     const rows=fromCache?structuredClone(cached!.products):await this.hostGate.run(provider.status.host??provider.status.id,requestSignal,()=>provider.search!(category,query,requestSignal))
     const selected=rows.filter(p=>selection.stores.includes(p.retailer)&&p.retailer===provider.status.id)
     found.push(...selected);pools.set(provider.status.id,[...new Map(found.map(p=>[p.id,p])).values()].slice(0,24))
-    const restriction=d?.rejections.slice(beforeRejects).find(r=>/HTTP (401|403|429)|challenge|captcha|login/i.test(r.reason))
+    const restriction=d?.rejections.slice(beforeRejects).find(r=>/HTTP (401|403|429)|access denied|request blocked|challenge|captcha|sign.in|login|page failed:|Frame with ID .*error page|navigation did not finish/i.test(r.reason))
     if(restriction){recordSource(this.state,provider.status.id,restriction.reason);errors.push(provider.status.id+': '+restriction.reason);break}
     const noReliableRows=selected.length===0&&(d?.rejections.slice(beforeRejects).some(r=>['listing','parsing','variant'].includes(r.stage))??false)
     const requiredFacts=selected.some(p=>p.title.trim()&&p.price!==null&&p.price>0&&p.currency==='INR'&&p.observedAt&&Number.isFinite(Date.parse(p.observedAt))&&matchingPhoto(p))
-    if(noReliableRows||selected.length>0&&!requiredFacts){const reason='Readable catalogue did not provide reliable INR listing facts and matching variant photos. This is a source-data limitation, not a category/budget mismatch.';errors.push(provider.status.id+': '+reason);recordSource(this.state,provider.status.id,reason);break}
+    if(noReliableRows||selected.length>0&&!requiredFacts){const missing=[...new Set(selected.flatMap(p=>[!p.title.trim()?'title':'',p.price===null||p.price<=0||p.currency!=='INR'?'observed INR price':'',!matchingPhoto(p)?'exact listing/variant-to-photo proof':''].filter(Boolean)))];const reason=`Read ${selected.length} listing records; ${selected.filter(p=>p.price!==null&&p.price>0&&p.currency==='INR').length} with INR price. Still missing: ${missing.join(', ')||'readable listing facts'}. Existing candidates are kept; category and budget were not changed.`;errors.push(provider.status.id+': '+reason);recordSource(this.state,provider.status.id,reason);break}
     inventoryAccessible=true
     if(!fromCache){recordSource(this.state,provider.status.id);this.cache.set(key,{at:Date.now(),products:structuredClone(selected)})}if(this.cache.size>60)this.cache.delete(this.cache.keys().next().value!)
     const matching=found.filter(p=>{if(!p.category||!p.subcategory)classify(p,this.state.settings.categories);return p.category===slot.category&&p.subcategory===slot.subcategory&&p.currency==='INR'&&p.price!==null&&p.price>=selection.min&&p.price<=selection.max&&matchingPhoto(p)&&p.stock!=='out-of-stock'})
     if(selectProducts(matching,selection.size+2).length>=selection.size+2)break
-   }catch(e){const reason=message(e);errors.push(provider.status.id+': '+reason);reject(d,'search',reason);if(!signal.aborted)recordSource(this.state,provider.status.id,reason);break}
+   }catch(e){const partial=provider.collected?.filter(p=>selection.stores.includes(p.retailer)&&p.retailer===provider.status.id)??[];found.push(...partial);pools.set(provider.status.id,[...new Map(found.map(p=>[p.id,p])).values()].slice(0,24));const reason=message(e);errors.push(provider.status.id+': '+reason);reject(d,'search',reason);if(!signal.aborted)recordSource(this.state,provider.status.id,reason);break}
   }
  })
  this.merge([...pools.values()].flat());signal.throwIfAborted()

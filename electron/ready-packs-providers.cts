@@ -4,7 +4,7 @@ import { bytes, publicTarget } from './product-network.cjs'
 import { publicHttps } from './product-find-data.cjs'
 import { candidate } from './ready-packs-core.cjs'
 import type { PackProduct, Category, ProviderStatus } from './ready-packs-types.cjs'
-export type Provider = { status:ProviderStatus; diagnostics?:DiscoveryDiagnostics; search?:(category:Category,sub:string,signal:AbortSignal)=>Promise<PackProduct[]>; details?:(p:PackProduct,signal:AbortSignal)=>Promise<PackProduct> }
+export type Provider = { status:ProviderStatus; diagnostics?:DiscoveryDiagnostics; collected?:PackProduct[]; search?:(category:Category,sub:string,signal:AbortSignal)=>Promise<PackProduct[]>; details?:(p:PackProduct,signal:AbortSignal)=>Promise<PackProduct> }
 export type Keys = { flipkartId:string; flipkartToken:string; imagePermission:string }
 export function retailerAnchors(html:string,base:string):PackProduct[] {
  const found=new Map<string,PackProduct>();for(const match of html.matchAll(/<a\b[^>]*href\s*=\s*["']([^"']+)["']/gi)){try{const url=new URL(match[1].replace(/&amp;/g,'&').replace(/&#38;/g,'&'),base).href;const p=candidate(url);found.set(p.id,p)}catch{/* Public retailer detail anchors only; scripts are not executed. */}}return[...found.values()].slice(0,8)
@@ -42,6 +42,16 @@ export function youtubeProvider(key:string,diagnostics?:DiscoveryDiagnostics):Pr
 const https=(s:string)=>publicHttps(s.replace(/^http:/,'https:'))
 function stock(value:unknown):PackProduct['stock'] {return value===true||value==='https://schema.org/InStock'||value==='http://schema.org/InStock'?'in-stock':value===false||/OutOfStock|Discontinued|SoldOut/.test(String(value))?'out-of-stock':'unknown'}
 export function classify(p:PackProduct,categories:Category[]):void {
+ // Exact listing specifications can establish length when the real title omits it.
+ // Never append inferred facts to the observed title or treat missing length as short.
+ const length=Object.entries(p.listingAttributes??{}).find(([key])=>/^(?:length|length type)$/i.test(key))?.[1]
+ const singleKurta=p.retailer==='myntra'&&/^\/kurtas\//.test(new URL(p.url).pathname)||p.retailer==='flipkart'&&/\b(?:kurta|kurti)s?\b/i.test(p.title)&&!/\b(?:sets?|with trousers|with palazzos|with pants|with dupatta)\b/i.test(p.title)
+ if(singleKurta&&length){
+  const normalized=length.replace(/[\s_-]/g,'').toLowerCase()
+  const sub=['hiplength','waistlength','aboveknee','short','shortlength'].includes(normalized)?'short kurtis':['kneelength','calflength','anklelength','maxi','floorlength','long','longlength'].includes(normalized)?'long kurtis':''
+  const category=categories.find(c=>c.subcategories.includes(sub))
+  if(sub&&category){p.category=category.id;p.subcategory=sub;p.assessment.fit='Observed listing length: '+length;return}
+ }
  p.category='';p.subcategory='';const title=p.title.toLowerCase();const aliases:Record<string,string>={'short kurtis':'short kurti|short kurta','long kurtis':'long kurti|long kurta','shorts':'shorts','tops':'top','T-shirts':'t-shirt|tshirt','casual co-ords':'co-ord|coord','casual dresses':'casual dress','kurta':'kurta set','suit sets':'suit set','shirts':'shirt','tunics':'tunic','festive gowns':'gown','Indo-western':'indo western','party dresses':'party dress','modest clothing':'modest','maternity':'maternity','nursing':'nursing'}
  const matches: {c:Category;sub:string}[]=[]
  for(const c of categories)for(const sub of c.subcategories){if(sub==='shirts'&&/t[ -]?shirt/.test(title))continue;const terms=(aliases[sub]??sub.replace(/s$/,'')).split('|');if(terms.some(t=>new RegExp('\\b'+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'s?\\b','i').test(title)))matches.push({c,sub})}

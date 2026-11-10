@@ -14,7 +14,11 @@ assert.equal(config.nsis.perMachine, false)
 assert.ok(config.asarUnpack.includes('node_modules/sharp/**'))
 assert.ok(config.asarUnpack.includes('node_modules/@img/**'))
 assert.ok(config.asarUnpack.includes('node_modules/onnxruntime-node/**'))
-assert.deepEqual(config.extraResources, [{ from: 'extension', to: 'flow-companion', filter: ['*.json', '*.js', '*.html', '*.css', 'README.md'] }, { from: 'electron/flow-native-submit.ps1', to: 'flow-native-submit.ps1' }])
+assert.deepEqual(config.extraResources, [
+  { from: 'extension', to: 'flow-companion', filter: ['*.json', '*.js', '*.html', '*.css', 'icons/*.png', 'icon.svg', 'README.md'] },
+  { from: 'extension-product-finder', to: 'product-finder', filter: ['*.json', '*.js', '*.html', '*.css', 'icons/*.png', 'icon.svg', 'README.md'] },
+  { from: 'electron/flow-native-submit.ps1', to: 'flow-native-submit.ps1' },
+])
 assert.ok(!config.extraFiles)
 const icon = await readFile(path.join(root, 'build/icon.ico'))
 assert.equal(icon.readUInt16LE(2), 1)

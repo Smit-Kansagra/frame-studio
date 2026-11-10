@@ -1,12 +1,69 @@
-# Product Find — Auto workflow (0.13.0-preview.50)
+# Product Find — Auto workflow (0.13.0-preview.54)
 
-This source revision retains the one-click Auto workflow and adds owner-entered platform priority for preview.50. Product collection and export have not been runtime-tested. Existing projects, photos, settings, credentials and libraries retain their profile and locations. A newer installer does not resolve missing retailer access; this is not a claim that all five marketplaces can now produce a real pack.
+## Permanent extension folder (preview.54)
+
+Product Finder 0.1.1 now uses `%APPDATA%\Frame Studio\browser-extensions\product-finder`, prepared from the app's bundled extension assets on startup. The Settings folder action opens this stable path. Load it once; after future app updates, finish/cancel collection and click **Refresh extension** in its popup or **Reload** in Chrome. Refresh is refused while a worker is active. Existing users loaded from a versioned release or resource folder must switch to the permanent folder once; future version-directory cleanup does not remove this path. The app copies only an explicit extension-asset list with staged writes, unchanged-file preservation, manifest-last ordering and rollback on write failure. It never installs extensions, touches Chrome's profile or stores a permanent pairing token. Pairing after refresh/restart is still required. Saved app products, credentials and projects stay untouched. Runtime/browser tests remain unrun, per owner instruction.
+
+**Preview.54 delivery:** `npm run build:installer` completed the repository's required TypeScript checks, renderer build, Electron compilation and Windows packaging. Packaged resource inspection confirmed Product Finder 0.1.1 and its Refresh button. No fixture, runtime, Chrome, retailer or model tests were run, and nothing was installed. Output: `release/0.13.0-preview.54/Frame-Studio-0.13.0-preview.54-x64-Setup.exe` (176,829,539 bytes), SHA-256 `2F5E91B7AE1482113D6FD1A005F503441F053CF041A877796C2117796BDD44E5`.
+
+At the owner's request, eight obsolete generated release directories (preview.46 through preview.53) were removed after the new installer completed, reclaiming 5,046,363,792 bytes. Their paths were checked for containment, running app processes, reparse points and personal database/credential files before deletion. The current packaging debug file was also removed. Required source, documentation, dependencies, cached offline build tools, model assets and the current release were retained. Existing app profile data and Chrome installations were not deleted. Historical delivery paths below refer to removed old builds.
+
+## Extension names and icons (preview.53)
+
+The former combined extension is now two separately loadable extensions. **Flow Bridge 0.1.9** has a blue bridge/play icon and remains in the existing `extension` source / `resources/flow-companion` packaged folder. **Product Finder 0.1.0** has a purple clothing/search icon and lives in `extension-product-finder` source / `resources/product-finder` packaged folder. Toolbar, extension-manager, popup favicon and popup header use the corresponding real PNG icons at 16/32/48/128 pixels. Settings folder buttons and pairing instructions point to the correct extension. The existing Flow page adapter and product collection/verification code are retained.
+
+Reload the existing companion to update it to Flow Bridge. Then in **Settings / Product Find / Advanced**, click **Open Product Finder folder**, load that folder through Chrome's **Load unpacked**, and pair a fresh Product Find code in Product Finder. Its separate extension identity requires its own selected-site permission approval. No app data, user preferences, projects, credentials, history or downloaded models are deleted; no extension is installed automatically. Retailer access restrictions and commercial image permission checks are unchanged. No runtime/browser/fixture/model tests were run. Real 4–6-product collection/export remains pending manual testing.
+
+Earlier preview notes below document historical code and delivery; their combined-popup instructions are superseded by this section.
+
+**Preview.53 delivery:** `npm run build:installer` completed its required TypeScript checks, production renderer build, Electron compilation and Windows packaging. A final packaging-only pass included the shortened Chrome manifest description. Read-only resource inspection confirmed both named extension folders and all eight PNG icons. No runtime, fixture, browser, retailer or model tests were run; nothing was installed or launched. Output: `release/0.13.0-preview.53/Frame-Studio-0.13.0-preview.53-x64-Setup.exe` (176,828,149 bytes). SHA-256: `21231415E23711919D6C61F0A1F641512B01A3D817DD352AEC6DA29019F968EA`.
+
+Preview.52 improves exact Product/SKU binding and Chrome failure handling in the existing one-click Chrome/priority workflow. It visits actual retailer public search and product pages, collects observed facts through an isolated DOM reader, and feeds the existing verification, selection, persistence and export service. It does not use EarnKaro or convert affiliate links. The new fixes have not been runtime-tested; no real pack/export success or all-five-platform access is claimed. Existing projects, photos, settings, credentials and libraries retain their profile and locations.
+
+## Owner-reported failure and source-only fixes (preview.52)
+
+Read-only inspection of the owner's saved run showed Flipkart counts: 40 search results/links, 8 accessible/parsed listings, 8 budget matches, 0 category matches, 0 variant matches, 0 usable photos and 0 pack candidates. All eight retained records had observed INR prices and image URLs; sampled records also had colour names. The parser's exact URL match did not establish identity; missing price or colour alone was not the cause. The original raw JSON-LD was not saved, so availability of exact SKU/productID proof in those responses is not established by this audit.
+
+New parsing can bind a supplied Product using its actual exact URL (including safe normalization of HTTP metadata URLs) or exact SKU/productID against the observed original listing identity. Only a uniquely bound Product can supply Flipkart PID-specific photo proof. Missing identity evidence remains unknown; no stored candidate is retroactively marked verified. Public specification tables supply allowlisted fields such as Length Type and Ideal For. Short/long kurti classification requires an explicit observed length; missing length is not short. Known men's-only specifications are excluded. Newly verified inventory can influence the one existing Auto fallback; manual category, budget and partial selection are unchanged.
+
+Myntra/Meesho saved search counts were zero with Chrome's `Frame with ID 0 is showing error page`. This establishes a Chrome page/read failure, but not its exact DNS, SSL, network, site-access or navigation cause. The collector now waits for committed retailer navigation, stops rather than injecting after a 28-second navigation timeout, includes store/stage/requested original URL in the error, stops subsequent detail/query attempts after that failure, and retains the failed collection tab for the owner to inspect. Successful/cancelled tabs still close. No CAPTCHA, login, security warning or site restriction is bypassed. These are error-handling fixes, not proof that those external navigation failures are resolved.
+
+Reload extension `0.1.8-products.2` from this app's companion folder, then create/paste a fresh Product Find code. The version handshake rejects stale product readers; Flow's page adapter remains unchanged. Explicit pairing clears prior source-health pauses for another owner-initiated run; saved products, packs, history, credentials and the SQLite database are not deleted or modified by this source audit. No tests, live retailer requests, browser probes or model calls were run for these fixes. Real-pack acceptance remains pending owner testing.
+
+Refresh also preserves inherited image licence/account identifiers, allowing the existing permission layer to revoke or expire a grant after reparsing. Parsing a photo does not grant new usage permission.
+
+**Preview.52 delivery:** final `npm run build:installer` passed its required TypeScript checks, UI build, Electron compilation and Windows packaging. An initial packaging attempt encountered a temporary Windows executable lock; an intermediate restricted rebuild encountered `spawn EPERM`; the final rebuild completed with approved packaging permissions. No app process was terminated. Read-only archive inspection confirmed app `0.13.0-preview.52`, extension `0.1.8-products.2`, exact SKU binding, inherited licence scope, the new handshake and failed-tab handling. This checks packaged source presence, not retailer compatibility. Feature/fixture tests, live requests, browser probes and model calls were not run. The app was not installed or launched.
+
+Output: `release/0.13.0-preview.52/Frame-Studio-0.13.0-preview.52-x64-Setup.exe` (176,813,057 bytes); SHA-256 `943A4BC73A8171881F14EE95813ACF710A138C7FA98F464D46A9032A278EE06D`.
+
+## Chrome collection setup (preview.52; owner testing required)
+
+1. Open **Settings / Product Find / Advanced / Chrome product collection**. Click **Open companion folder**.
+2. In Chrome, open `chrome://extensions`, enable Developer mode, then **Load unpacked** and select that folder. Reload/update an existing installation from the new app folder. Verify extension `0.1.8-products.2`.
+3. Keep a normal Chrome window open. Click **Create Product Find code** in the app.
+4. Open the companion popup. In **Product Find**, select shopping sites, paste the code and click **Allow sites and connect Product Find**. Allow the selected site origins in Chrome. This is separate from Flow pairing.
+5. Save manual numbers in **Platform priority** (1 first, 2 next; blanks last). Leave Product Find on Auto stores. Click **Find my next post**. No category/budget/store selection is needed on each search.
+6. Repeat pairing after restarting the app or Chrome. Saved packs/candidates survive disconnection. Browser permissions alone do not grant commercial photo rights.
+
+The extension uses the official optional-host-permissions, scripting-in-isolated-world and WebSocket APIs. Only selected retailer origins are requested; no `<all_urls>`, cookie, history, browser-debugger or account-token permission is added. The app serves a single-use, five-minute connection capability on an ephemeral loopback port; HTTP requests receive 404, and only authenticated Chrome-extension WebSockets can submit replies. No VPS/service is installed. Commands contain only bounded public clothing queries or validated original detail links. No arbitrary script or file command exists. The existing AI runner never receives browser permissions.
+
+Myntra's reader can verify its canonical/style ID against visible product code, current INR PDP price and that listing's own main gallery. A missing colour name stays unknown; the variant label explicitly identifies the observed listing. Explicit observed length specifications can classify short versus long kurtis without altering the real title. Other pages need exact structured Product/Offer/colour/image relationships. Missing facts stay unknown and are retained, not promoted to verified products.
+
+Myntra, Meesho and Flipkart have implemented, unverified Chrome search/detail paths after pairing. Optional approved Flipkart API access takes precedence if already saved. Amazon/AJIO have implemented structured page readers but automatic use is gated on genuine existing `catalogue-research` permission because Chrome access does not override retailer restrictions. No new paid access is required or suggested; a disabled restricted store never blocks eligible stores.
+
+At most three retailer workers run, with per-host serialization, bounded query/detail requests, the existing total deadline and exact hard filters. Cancellation sends a scoped cancel, waits for the extension's worker/tab cleanup acknowledgement, and only then settles the request. A missing acknowledgement disconnects the transport and prevents another Chrome job until reconnecting. Completed detail reads are buffered so a later timeout/cancel does not discard already collected candidates. Browser/login/CAPTCHA errors are visible and paused, without bypass. No background discovery is introduced.
+
+**Current checklist:** Chrome bridge, popup permissions/pairing, rendered search/detail reads, active runtime wiring, buffered cancellation, source status and original link/photo mapping are implemented and source-reviewed. Fixture tests: not run. Runtime/extension/live retailer/model calls for this revision: not run, per owner instruction. Real 4–6-product acceptance and export: pending owner testing. Packaging status is recorded after the requested installer build. Older audit notes below describe earlier versions, not a live verification of these new readers.
+
+**Preview.51 build delivery:** TypeScript compilation/checks and the production UI build completed through `npm run build:installer`. Its first packaging attempt encountered a Windows executable lock; packaging-only retry also needed permission to spawn outside the restricted sandbox. `node scripts/package-win.mjs --isolated-output` then exited successfully. No app processes were terminated and no security settings were changed. Read-only archive/resource inspection confirmed app version, compiled Chrome bridge, extension `0.1.7-products.1`, optional shopping origins and unchanged Flow origin scope. This is artifact inspection, not runtime acceptance. No tests, Chrome probes, retailer requests or model calls ran for the implementation. Nothing was installed or launched, and production profile/database files were not edited.
+
+Installer: `release/0.13.0-preview.51/Frame-Studio-0.13.0-preview.51-x64-Setup.exe`; 176,810,603 bytes; SHA-256 `81B87C9CE2EEDDE760DCEC55E032A92DFA4A33DEA9B61E694B6ECF74F9045C62`.
 
 ## Install and preserve data
 
-Before any future update, close Frame Studio and back up the complete `%APPDATA%\Frame Studio` directory and the workspace shown in Settings. Keep the backup until testing finishes. The preview.50 installer includes saved manual platform priority and remains a manual installation:
+Before any future update, close Frame Studio and back up the complete `%APPDATA%\Frame Studio` directory and the workspace shown in Settings. Keep the backup until testing finishes. The preview.52 installer includes Chrome collection fixes and saved manual platform priority; installation remains manual:
 
-`release/0.13.0-preview.50/Frame-Studio-0.13.0-preview.50-x64-Setup.exe`
+`release/0.13.0-preview.52/Frame-Studio-0.13.0-preview.52-x64-Setup.exe`
 
 The existing application ID and profile path are unchanged. Do not use third-party uninstall/data cleaners. Windows-encrypted credentials remain tied to the original Windows user/key context.
 
@@ -78,13 +135,13 @@ Official references: [CLI](https://antigravity.google/docs/cli/reference/), [hea
 | Public listing structured data | Exact product JSON-LD where accessible | Retailers can block access or omit fields. Unknown facts are never filled by AI. |
 | Libas public Shopify adapter | Search, variant details, stock/sizes and matching-image parsing | Disabled without genuine merchant permission for automated research. Public API accessibility does not override merchant terms. |
 | Merchant-authorized WooCommerce Store API | New GET-only keyword search, exact ID details, variant/parent checks and listing-bound photos; wired into the same service, cards and export | Implemented but not runtime-tested. No merchant origin/grant is configured in the existing profile. Uses the documented public, unauthenticated API; it does not require keys, billing, proxies or a subscription. Merchant permission is still required for this commercial research use. |
-| Amazon India, Myntra, Meesho, AJIO dedicated catalogues | Automatic adapters unavailable | Store choices enforce filtering only; they do not establish access. Authorized feed records are optional fallbacks. AJIO detail URLs are now validated/canonicalized for those records. No guessed search endpoints were added. |
+| Chrome retailer collection (preview.51) | Implemented; unverified | User-paired search/detail DOM readers for supported stores. Myntra has a PDP gallery/code/price reader; others use strict structured data. Amazon/AJIO remain merchant-permission gated. Pairing is not proof of live access. |
 
 [Flipkart access instructions](https://affiliate.flipkart.com/api-docs/af_register.html), [token page for approved accounts](https://affiliate.flipkart.com/api/api-token), [Libas terms](https://www.libas.in/pages/terms-conditions), [Libas contact](https://www.libas.in/pages/contact-us).
 
-No approved Flipkart pack credentials or merchant research licences were present in the read-only profile metadata inspected for this revision. The repository's existing Chrome companion explicitly supports only Flow origins, and its guards/manifest permissions were not widened. An Antigravity or Google sign-in does not establish retailer access. No usable zero-cost automatic marketplace source is currently established with this profile. Do not purchase access or assume that free account approval is available; the app stops rather than pretending otherwise.
+Earlier profile inspection found no approved Flipkart pack credentials or merchant research licences. Preview.51 adds a separate optional Chrome collection connection without widening Flow's guards. An Antigravity or Google sign-in does not establish retailer access. New browser paths require owner pairing/manual verification; no usable live automatic marketplace source has yet been established by a completed acceptance run. No purchase or new API account is required for the implemented Chrome route.
 
-### Five-marketplace access audit
+### Historical five-marketplace access audit (before preview.51)
 
 #### Earlier commission-priority request (superseded by manual platform priority)
 
@@ -126,7 +183,7 @@ Current implementation checklist:
 | Auto source readiness, durable pause/recheck, bounded parallel collection, cancellation drain | Implemented; source-reviewed only |
 | Manual platform numbers, priority-first selection, snapshot persistence, partial/replacement priority | Implemented; source-reviewed only; not fixture-tested or live-verified |
 | WooCommerce search → detail/variant → image response → saved candidate → existing pack/export service | Implemented; unverified, requires an already-authorized merchant origin/grant |
-| Existing user's usable automatic retailer access | Blocked: no configured permitted collection route established |
+| Chrome retailer collection and actual source access | Implemented, unverified; owner must pair extension and verify compatible permitted sites. Amazon/AJIO still require existing merchant permission. |
 | Antigravity no-overage/tool restrictions | Existing guards retained; no account/model requests in this revision |
 | Real 4–6-product collection, replacement, JPEG/ZIP preview | Pending live/manual verification; no pass claimed |
 

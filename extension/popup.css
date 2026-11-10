@@ -1,3 +1,7 @@
 body { width: 340px; padding: 18px; font: 14px/1.5 system-ui; color: #e2ebdf; background: #152019; }
+.brand { display:flex; align-items:center; gap:12px; } .brand img { flex:none; border-radius:12px; } .brand .note { margin:2px 0 0; }
 h1 { margin: 0; font-size: 24px; } label { display: block; margin-top: 18px; } input { box-sizing: border-box; width: 100%; padding: 10px; margin: 8px 0; }
 button { padding: 10px 14px; margin: 6px 4px 6px 0; cursor: pointer; } .note { font-size: 12px; color: #bbc9ba; } #status { white-space: pre-wrap; }
+input[type=checkbox] { width:18px; padding:0; margin:0 8px 0 0; vertical-align:middle; }
+#product-stores { padding:10px; margin:12px 0; } #product-stores label { margin-top:10px; }
+#product-status { white-space:pre-wrap; } hr { margin:22px 0; border:0; border-top:1px solid #bbc9ba; }

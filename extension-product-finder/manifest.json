@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Product Finder",
+  "version": "0.1.1",
+  "minimum_chrome_version": "116",
+  "description": "Original clothing listings for Frame Studio. Explicit local pairing and optional shopping-site access. No cookie access.",
+  "permissions": ["scripting"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "optional_host_permissions": ["https://www.myntra.com/*", "https://www.meesho.com/*", "https://www.flipkart.com/*", "https://www.amazon.in/*", "https://www.ajio.com/*"],
+  "icons": { "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" },
+  "background": { "service_worker": "product-browser.js", "type": "module" },
+  "action": { "default_title": "Product Finder — connect clothing collection", "default_popup": "popup.html", "default_icon": { "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" } },
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; connect-src ws://127.0.0.1:*" }
+}
