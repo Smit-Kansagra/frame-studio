@@ -4,6 +4,7 @@ import type { ExportProgress, FrameStudioAPI,LogoReview } from './contracts.cjs'
 // Type-only imports are erased: sandboxed preload never requires local modules.
 const bridge: FrameStudioAPI = {
   platform: 'windows', phase: 11,
+  readyPacks: { status: () => ipcRenderer.invoke('ready-packs:status'), action: action => ipcRenderer.invoke('ready-packs:action', action) },
   discovery: {
     status: () => ipcRenderer.invoke('discovery:status'),
     save: value => ipcRenderer.invoke('discovery:save', value),

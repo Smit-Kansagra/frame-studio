@@ -87,6 +87,10 @@ export type DiscoverySettings = { youtubeKey: string; geminiKey: string; hasYout
 export type DiscoveryProduct = FoundProduct & { pageId: string; title: string; sources: { url: string; creator: string; views: number; published: string }[]; state: 'ready' | 'downloaded' | 'posted'; foundAt: string }
 export type DiscoveryState = { settings: DiscoverySettings; products: DiscoveryProduct[]; job: ProductFindJob; nextRunAt: string | null }
 export type FrameStudioAPI = {
+  readyPacks: {
+    status: () => Promise<import('./ready-packs-types.cjs').PackStore>
+    action: (action: import('./ready-packs-types.cjs').PackAction) => Promise<unknown>
+  }
   discovery: {
     status: () => Promise<DiscoveryState>
     save: (settings: DiscoverySettings) => Promise<void>

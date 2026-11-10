@@ -5,6 +5,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import sharp from 'sharp'
 import { Workspace } from '../dist-electron/storage/workspace.cjs'
+import { SCHEMA_VERSION } from '../dist-electron/storage/database.cjs'
 
 const reportFile = path.resolve('artifacts/product-check-report.json')
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')
@@ -50,13 +51,13 @@ try {
   }
   // Construct the exact pre-products state in this disposable database to test upgrade.
   await workspace.close()
-  sql(db => db.exec('DROP TABLE project_exports; DROP TABLE scene_reviews; DROP TABLE generation_attempts; DROP TABLE project_assets; DROP TABLE project_revisions; DROP TABLE projects; DROP TABLE character_trash; DROP TABLE character_assets; DROP TABLE character_revisions; DROP TABLE characters; DROP TABLE theme_trash; DROP TABLE theme_assets; DROP TABLE theme_revisions; DROP TABLE themes; DROP TABLE asset_edits; DROP TABLE product_trash; DROP TABLE product_assets; DROP TABLE products; DELETE FROM schema_migrations WHERE version >= 2; PRAGMA user_version = 1;'))
+  sql(db => db.exec('DROP TABLE logo_reviews; DROP TABLE flow_jobs; DROP TABLE flow_projects; DROP TABLE project_exports; DROP TABLE scene_reviews; DROP TABLE generation_attempts; DROP TABLE project_assets; DROP TABLE project_revisions; DROP TABLE projects; DROP TABLE character_trash; DROP TABLE character_assets; DROP TABLE character_revisions; DROP TABLE characters; DROP TABLE theme_trash; DROP TABLE theme_assets; DROP TABLE theme_revisions; DROP TABLE themes; DROP TABLE asset_edits; DROP TABLE product_trash; DROP TABLE product_assets; DROP TABLE products; DELETE FROM schema_migrations WHERE version >= 2; PRAGMA user_version = 1;'))
   workspace = await Workspace.open(folder)
-  assert.equal((await workspace.status()).schemaVersion, 8)
+  assert.equal((await workspace.status()).schemaVersion, SCHEMA_VERSION)
   assert.equal((await workspace.status()).assetCount, 3)
   assert.equal((await workspace.products.list()).total, 0)
-  assert.equal(sql(db => db.prepare('SELECT count(*) AS count FROM schema_migrations').get().count), 8)
-  pass('schema 1 upgrades transactionally to schema 8 with existing image records and files intact')
+  assert.equal(sql(db => db.prepare('SELECT count(*) AS count FROM schema_migrations').get().count), SCHEMA_VERSION)
+  pass(`schema 1 upgrades transactionally to schema ${SCHEMA_VERSION} with existing image records and files intact`)
 
   let product = await workspace.products.save({ name: "Demo Amber O'Brien", description: 'Amber glass bottle', notes: 'Keep the cap black', assetIds: [assets[0].id, assets[1].id], primaryAssetId: assets[0].id })
   assert.equal(product.photos.length, 2)

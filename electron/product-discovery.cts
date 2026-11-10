@@ -1,9 +1,8 @@
+import { bytes, publicTarget } from './product-network.cjs'
 import { filterShortlist } from './product-shortlist.cjs'
 import { app, clipboard, dialog, ipcMain, safeStorage } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
-import { lookup } from 'node:dns/promises'
-import { isIP } from 'node:net'
+import { mkdir, readFile, writeFile, rename, copyFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import sharp from 'sharp'
@@ -12,27 +11,7 @@ import { listing } from './product-find-research.cjs'
 import { allowDiscoveryImages } from './product-find.cjs'
 import type { DiscoverySettings, DiscoveryProduct, DiscoveryState, ProductFindJob, ProductMarketplace } from './contracts.cjs'
 const roots: Record<ProductMarketplace,string> = { myntra:'myntra.com', meesho:'meesho.com', flipkart:'flipkart.com', amazon:'amazon.in' }
-const defaults: DiscoverySettings = { youtubeKey:'', geminiKey:'', ai:'hybrid', model:'qwen3:4b-instruct', channels:'', pages:[] }
-// Reject private and reserved addresses before every external fetch, including redirects.
-async function publicTarget(raw:string) {
-  const url = new URL(publicHttps(raw))
-  if (isIP(url.hostname)) throw new Error('Literal IP addresses are not allowed.')
-  const addresses = await lookup(url.hostname,{all:true})
-  if (!addresses.length || addresses.some(({address:a}) => (a.includes(':') && (/^(::|fc|fd|fe[89ab]|ff)/i.test(a) || a.includes('.'))) || /^(0|10|127|169|192|22[4-9]|2[3-5]\d)\./.test(a) || /^172\.(1[6-9]|2\d|3[01])\./.test(a) || /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(a))) throw new Error('Private or unsupported network target.')
-  return url.href
-}
-async function bytes(url:string, signal:AbortSignal, limit=3_000_000):Promise<{data:Buffer;type:string}> {
-  for(let n=0;n<5;n++) {
-    const response = await fetch(await publicTarget(url),{redirect:'manual',signal:AbortSignal.any([signal,AbortSignal.timeout(20000)])})
-    if(response.status>=300 && response.status<400) { const next=response.headers.get('location');if(!next)throw new Error('Missing redirect.');url=new URL(next,url).href;continue }
-    if(!response.ok)throw new Error(`Source returned HTTP ${response.status}.`)
-    if(Number(response.headers.get('content-length'))>limit)throw new Error('Source is too large.')
-    const reader=response.body!.getReader();const chunks:Uint8Array[]=[];let size=0
-    try { while(true){const part=await reader.read();if(part.done)break;size+=part.value.length;if(size>limit)throw new Error('Source is too large.');chunks.push(part.value)} } finally {await reader.cancel()}
-    return {data:Buffer.concat(chunks),type:response.headers.get('content-type')??''}
-  }
-  throw new Error('Too many redirects.')
-}
+const defaults: DiscoverySettings = { youtubeKey:'', geminiKey:'', ai:'antigravity', model:'', channels:'', pages:[] }
 function searchTerms(query:string,platforms:ProductMarketplace[]):string {
   const words=query.toLowerCase().replace(/\b(asthetic|asthetic|aesthatic)\b/g,'aesthetic').replace(/\bwoman\b/g,'women').replace(/\b(find|give|show|please|products?|photos?|links?|for|me)\b/g,' ').replace(/\b\d+\b/g,' ').replace(/\s+/g,' ').trim()
   return (words+' '+platforms.join(' ')+' haul').trim()
@@ -64,9 +43,9 @@ function imageFromHtml(html:string):string {
   throw new Error('No original product image exposed by retailer.')
 }
 function validate(value:unknown):DiscoverySettings {
-  const s=value as DiscoverySettings
+  const raw=value as DiscoverySettings;const s=raw?{...raw,ai:['ollama','hybrid','gemini'].includes(raw.ai)?'antigravity':raw.ai,model:raw.ai==='none'?'':raw.ai==='antigravity'?raw.model:''} as DiscoverySettings:raw
   if(!s || !['none','ollama','antigravity','hybrid'].includes(s.ai)||typeof s.model!=='string'||s.model.length>100||!/^[-a-zA-Z0-9_.:]*$/.test(s.model)||typeof s.channels!=='string'||s.channels.length>3000||!Array.isArray(s.pages)||s.pages.length>30)throw new Error('Invalid discovery settings.')
-  if(['ollama','hybrid'].includes(s.ai)&&!s.model.trim())throw new Error('Enter an installed Ollama model name.')
+
   const channels=s.channels.split(/[\s,]+/).filter(Boolean)
   if(channels.length>10||channels.some(c=>!/^UC[\w-]{22}$/.test(c)))throw new Error('Use up to 10 YouTube channel IDs, one per line (UC...).')
   const ids=new Set<string>()
@@ -79,7 +58,7 @@ export function registerDiscovery(folder:string,authorized:(e:IpcMainInvokeEvent
   let job:ProductFindJob={state:'idle',message:'Add a page and configure a YouTube Data API key.',startedAt:null}
   let controller:AbortController|null=null, mutating=false, persisting=Promise.resolve()
   const file=path.join(folder,'library.json'),secrets=path.join(folder,'keys.bin')
-  const ready=(async()=>{try{const data=JSON.parse(await readFile(file,'utf8'));settings=validate({...data.settings,ai:data.settings.ai==='gemini'?'hybrid':data.settings.ai,model:!data.settings.model||data.settings.model==='qwen2.5:1.5b'||data.settings.ai==='gemini'?'qwen3:4b-instruct':data.settings.model,youtubeKey:'',geminiKey:''});products=data.products;nextRunAt=data.nextRunAt??null;if(!Array.isArray(products)||products.length>3000)throw new Error('Invalid product library.');for(const p of products){publicHttps(p.product_url);publicHttps(p.image_url)}}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw new Error('Product library could not be loaded. Existing data was preserved.')}
+  const ready=(async()=>{try{const data=JSON.parse(await readFile(file,'utf8'));if(['ollama','hybrid','gemini'].includes(data.settings.ai))await copyFile(file,file+'.before-account-ai.bak',1).catch(e=>{if(e.code!=='EEXIST')throw e});settings=validate({...data.settings,youtubeKey:'',geminiKey:''});products=data.products;nextRunAt=data.nextRunAt??null;if(!Array.isArray(products)||products.length>3000)throw new Error('Invalid product library.');for(const p of products){publicHttps(p.product_url);publicHttps(p.image_url)}}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw new Error('Product library could not be loaded. Existing data was preserved.')}
     try{const keys=JSON.parse(safeStorage.decryptString(await readFile(secrets)));settings.youtubeKey=keys.youtubeKey??'';settings.geminiKey=''}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')job.message='Saved API keys could not be unlocked. Enter them again.'}
   })();void ready.catch(e=>{job={...job,state:'error',message:e.message}})
   const persist=()=>{const snapshot=JSON.stringify({settings:{...settings,youtubeKey:'',geminiKey:''},products,nextRunAt});const operation=persisting.then(async()=>{await mkdir(folder,{recursive:true});await writeFile(file+'.tmp',snapshot);await rename(file+'.tmp',file)});persisting=operation.catch(()=>{});return operation}

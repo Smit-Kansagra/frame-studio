@@ -1,6 +1,6 @@
 {
   "name": "frame-studio",
-  "version": "0.13.0-preview.46",
+  "version": "0.13.0-preview.47",
   "private": true,
   "description": "A personal Windows studio for product photos, posts, and reels.",
   "type": "module",
@@ -29,7 +29,9 @@
     "check:flow": "tsc -p tsconfig.electron.json && node scripts/check-flow.mjs",
     "check:companion": "tsc -p tsconfig.electron.json && node scripts/check-companion.mjs",
     "check:extension-browser": "node scripts/check-flow-extension-browser.mjs",
-    "check:reel-export": "tsc -p tsconfig.storage.json && node scripts/check-reel-export.mjs"
+    "check:reel-export": "tsc -p tsconfig.storage.json && node scripts/check-reel-export.mjs",
+    "check:ready-packs": "tsc -p tsconfig.electron.json && node scripts/check-ready-packs.mjs && node scripts/check-ready-packs-discovery.mjs && node scripts/check-ready-packs-ai.mjs",
+    "check:products-base": "node scripts/check-products-base-reopen.mjs"
   },
   "dependencies": {
     "onnxruntime-node": "1.31.1",
