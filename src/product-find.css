@@ -24,3 +24,23 @@
 
 .discovery-fields { display:grid; gap:12px; border:1px solid var(--border); border-radius:12px; padding:16px; margin:16px 0; }
 .discovery-fields input:not([type=checkbox]), .discovery-fields select { display:block; width:100%; padding:10px; margin-top:6px; }
+
+.find-controls { display:flex; align-items:flex-start; flex-wrap:wrap; gap:16px; padding:0; border:0; min-width:0; }
+.find-controls > label { flex:1 1 140px; min-width:120px; }
+.find-controls input:not([type=checkbox]), .find-controls select { display:block; width:100%; padding:10px; margin-top:8px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:inherit; }
+.find-stores { flex:1 1 180px; margin-top:0 !important; border:1px solid var(--border); border-radius:10px; padding:12px; }
+.find-stores label { display:flex; gap:10px; align-items:flex-start; margin-top:14px; }
+.find-stores input { margin-top:4px; }
+.find-stores small { display:block; font-weight:400; color:var(--muted); line-height:1.4; margin-top:3px; }
+.find-grid { margin-top:24px; }
+.find-card .find-heading { margin-top:12px; }
+.find-product-link { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; user-select:text; margin:12px 0; }
+.find-selectable-link { display:block; width:100%; min-width:0; box-sizing:border-box; padding:8px; border:1px solid var(--border); border-radius:6px; color:inherit; background:var(--surface-soft); font-size:12px; }
+.find-price { font-size:20px; font-weight:700; margin-bottom:8px; }
+.find-observed, .find-source-message { font-size:12px; }
+.find-card .find-actions { gap:8px; }
+.find-setup progress { width:100%; }
+.find-preference-summary { display:block; margin:16px 0 0; border:0; padding:8px 0; background:none; color:var(--muted); font:inherit; text-align:left; cursor:pointer; }
+.find-preference-summary:hover { color:inherit; text-decoration:underline; }
+.find-auto-toggle { display:flex; gap:8px; align-items:center; }
+.find-access-notice { margin-top:16px; padding:16px; border:1px solid var(--border); border-radius:10px; }

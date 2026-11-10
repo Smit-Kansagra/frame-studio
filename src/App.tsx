@@ -6,6 +6,7 @@ import { StorageStatus } from './StorageStatus'
 import { Themes } from './Themes'
 import { Characters } from './Characters'
 import { ProductFind } from './ProductFind'
+import { ProductFindAdvanced } from './ProductFindAdvanced'
 import { Studio as ProjectStudio } from './Studio'
 import type { FlowConnection } from '../electron/contracts.cjs'
 
@@ -58,6 +59,7 @@ function ConnectionStatus() {
 }
 
 function Settings() {
+  const [productAdvanced, setProductAdvanced] = useState(false)
   return <div className="settings-content">
     <section className="settings-card" aria-labelledby="flow-title">
       <div className="settings-card-heading"><span className="settings-icon"><Icon name="link" size={22} /></span><div><h2 id="flow-title">Google Flow</h2><p>Connect your signed-in Chrome workspace.</p></div><span className="neutral-badge">Chrome companion</span></div>
@@ -72,6 +74,7 @@ function Settings() {
       <div className="settings-card-heading"><span className="settings-icon"><Icon name="film" size={22} /></span><div><h2 id="tools-title">Video tools</h2><p>The finishing touches, right on your computer.</p></div><span className="neutral-badge">Checked during export</span></div>
       <div className="settings-card-body"><p>Reel exports use FFmpeg and FFprobe installed locally and available on PATH. Frame Studio detects them before export; approved Post images export offline without FFmpeg.</p></div>
     </section>
+    <section className="settings-card find-setup"><h2>Product Find / Advanced</h2><button className="button button-secondary" onClick={() => setProductAdvanced(open => !open)}>{productAdvanced ? 'Close advanced controls' : 'Open advanced controls'}</button>{productAdvanced && <ProductFindAdvanced />}</section>
     <div className="about-studio"><span className="brand-symbol brand-symbol-small"><i /><i /></span><div><strong>Frame Studio <span className="muted">{version}</span></strong><p>Your creative workspace</p></div></div>
   </div>
 }
@@ -177,7 +180,7 @@ export function App() {
       <div className="sidebar-bottom"><a className={`nav-link settings-nav ${page === 'settings' ? 'is-active' : ''}`} href="#settings" aria-current={page === 'settings' ? 'page' : undefined}><Icon name="settings" size={19} /><span>Settings</span>{page === 'settings' && <span className="nav-active-dot" />}</a><div className="sidebar-footer"><span className="avatar">ME</span><div><strong>My workspace</strong><span>Personal edition</span></div><Icon name="lock" size={14} /></div></div>
     </aside>
     <div className="main-column">
-      <header className="topbar"><div className="page-heading"><h1 id="main-content" tabIndex={-1} ref={heading}>{pages[page].title}</h1><p>{pages[page].description}</p></div><div className="topbar-actions"><ConnectionStatus /><button className="theme-toggle" type="button" onClick={toggleTheme} aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'} title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}><Icon name={theme === 'light' ? 'moon' : 'sun'} size={17} /><span>{theme === 'light' ? 'Dark mode' : 'Light mode'}</span></button>{page === 'studio' ? route.split('/')[1] ? <a className="button button-secondary" href="#studio">All projects</a> : window.frameStudio?.projects ? <a className="button button-primary button-small" href="#studio/new"><Icon name="plus" size={18} />New project</a> : <button className="button button-secondary" disabled>New project · Desktop app required</button> : (page === 'themes' || page === 'characters') ? route.split('/')[1] ? <a className="button button-secondary" href={`#${page}`}>Back to {page}</a> : window.frameStudio?.[page] ? <a className="button button-primary" href={`#${page}/new`}><Icon name="plus" size={18} />Add {library[page].singular}</a> : <button className="button button-secondary" disabled title="Open the desktop app to manage your library.">Add {library[page].singular} · Desktop app required</button> : null}</div></header>
+      <header className="topbar"><div className="page-heading"><h1 id="main-content" tabIndex={-1} ref={heading}>{pages[page].title}</h1><p>{pages[page].description}</p></div><div className="topbar-actions">{page !== 'product-find' && <ConnectionStatus />}<button className="theme-toggle" type="button" onClick={toggleTheme} aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'} title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}><Icon name={theme === 'light' ? 'moon' : 'sun'} size={17} /><span>{theme === 'light' ? 'Dark mode' : 'Light mode'}</span></button>{page === 'studio' ? route.split('/')[1] ? <a className="button button-secondary" href="#studio">All projects</a> : window.frameStudio?.projects ? <a className="button button-primary button-small" href="#studio/new"><Icon name="plus" size={18} />New project</a> : <button className="button button-secondary" disabled>New project · Desktop app required</button> : (page === 'themes' || page === 'characters') ? route.split('/')[1] ? <a className="button button-secondary" href={`#${page}`}>Back to {page}</a> : window.frameStudio?.[page] ? <a className="button button-primary" href={`#${page}/new`}><Icon name="plus" size={18} />Add {library[page].singular}</a> : <button className="button button-secondary" disabled title="Open the desktop app to manage your library.">Add {library[page].singular} · Desktop app required</button> : null}</div></header>
       <main className="page-scroll" ref={content} aria-labelledby="main-content"><div className={`page-content page-${page}`}>{page === 'studio' ? <ProjectStudio route={route.startsWith('#studio') ? route : '#studio'} onDirty={onDirty} onBusy={onBusy} /> : page === 'product-find' ? <ProductFind /> : page === 'settings' ? <Settings /> : page === 'themes' ? <Themes route={route} onDirty={onDirty} onBusy={onBusy} /> : <Characters route={route} onDirty={onDirty} onBusy={onBusy} />}</div></main>
     </div>
   </div>

@@ -47,13 +47,41 @@ export function classify(p:PackProduct,categories:Category[]):void {
  for(const c of categories)for(const sub of c.subcategories){if(sub==='shirts'&&/t[ -]?shirt/.test(title))continue;const terms=(aliases[sub]??sub.replace(/s$/,'')).split('|');if(terms.some(t=>new RegExp('\\b'+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'s?\\b','i').test(title)))matches.push({c,sub})}
  if(matches.length===1){p.category=matches[0].c.id;p.subcategory=matches[0].sub;p.assessment.fit='Listing title matches '+p.subcategory}else if(matches.length>1)p.failures.push('Ambiguous category; review classification in an imported record.')
 }
-export function flipkartProducts(raw:any,keys:Keys):PackProduct[] {
- return (raw.productInfoList??[]).slice(0,10).map((item:any)=>{const base=item.productBaseInfoV1??item.productBaseInfo?.productAttributes; if(!base?.productUrl)throw new Error('Unsupported Flipkart catalogue response.');const p=candidate(https(base.productUrl));p.title=String(base.title??'');p.garmentId=String(base.styleCode??(Array.isArray(base.productFamily)?[base.productId,...base.productFamily].map(String).map(x=>x.trim()).sort().join('|'):''));const price=base.flipkartSpecialPrice??base.flipkartSellingPrice??base.sellingPrice;p.price=typeof price?.amount==='number'?price.amount:null;p.currency=price?.currency??null;p.priceSource='Flipkart Affiliate API';p.observedAt=new Date().toISOString();p.stock=stock(base.inStock);p.sizes=(base.attributes?.size??base.size)?[String(base.attributes?.size??base.size)]:[];p.color=String(base.attributes?.color??base.color??'');p.variant=p.color||'unknown';p.match=p.color?'exact':'unknown';p.images=Object.values(base.imageUrls??{}).slice(0,1).map((url:any)=>({url:https(url),source:p.url,variant:p.variant,permission:'unknown',permissionNote:'',licenceAccount:keys.flipkartId,exportedAt:null}));p.evidence=[{url:p.url,at:p.observedAt,kind:'catalogue',note:'Retailer catalogue facts; no measured demand.'}];if(new URL(https(base.productUrl)).searchParams.has('affid')){p.affiliateUrl=https(base.productUrl);p.affiliateStatus='account-api'}return p})
+export function flipkartProducts(raw:any,keys:Keys,diagnostics?:DiscoveryDiagnostics):PackProduct[] {
+ if(!Array.isArray(raw.productInfoList))throw new Error('Flipkart response has no supported product catalogue records.')
+ return raw.productInfoList.slice(0,10).flatMap((item:any)=>{
+  try{
+   const base=item.productBaseInfoV1??item.productBaseInfo?.productAttributes
+   if(!base?.productUrl)throw new Error('Catalogue record has no original product URL.')
+   if(diagnostics)diagnostics.counts.extractedUrls++
+   const p=candidate(https(base.productUrl));if(p.retailer!=='flipkart')throw new Error('Catalogue record points to a different store.')
+   if(diagnostics){diagnostics.counts.resolvedRetailerUrls++;diagnostics.counts.accessibleListings++}
+   p.title=typeof base.title==='string'?base.title:'';p.garmentId=String(base.styleCode??(Array.isArray(base.productFamily)?[base.productId,...base.productFamily].map(String).map(x=>x.trim()).sort().join('|'):''))
+   const price=base.flipkartSpecialPrice??base.flipkartSellingPrice??base.sellingPrice
+   p.price=typeof price?.amount==='number'&&Number.isFinite(price.amount)&&price.amount>0?price.amount:null;p.currency=typeof price?.currency==='string'?price.currency:null
+   p.priceSource='Flipkart Affiliate API';p.observedAt=new Date().toISOString();p.stock=stock(base.inStock)
+   p.sizes=(base.attributes?.size??base.size)?[String(base.attributes?.size??base.size)]:[]
+   const color=base.attributes?.color??base.color;p.color=typeof color==='string'?color:'';p.variant=p.color||'unknown';p.match=p.color?'exact':'unknown'
+   const area=(key:string)=>{const m=key.match(/(\d+)x(\d+)/);return m?Number(m[1])*Number(m[2]):0}
+   const images=Object.entries(base.imageUrls??{}).sort(([a],[b])=>area(b)-area(a))
+   p.images=images.slice(0,1).flatMap(([,url])=>{try{return[{url:https(String(url)),source:p.url,variant:p.variant,permission:'unknown' as const,permissionNote:'',licenceAccount:keys.flipkartId,exportedAt:null}]}catch{reject(diagnostics,'photos','Catalogue image URL is invalid.');return[]}})
+   p.evidence=[{url:p.url,at:p.observedAt,kind:'catalogue',note:'Retailer catalogue facts; no measured demand.'}]
+   const supplied= https(base.productUrl)
+   if(keys.flipkartId&&new URL(supplied).searchParams.get('affid')===keys.flipkartId){p.affiliateUrl=supplied;p.affiliateStatus='account-api'}
+   if(diagnostics)diagnostics.counts.parsedProducts++
+   return[p]
+  }catch(e){reject(diagnostics,'parsing',e instanceof Error?e.message:'Unsupported catalogue product.');return[]}
+ })
 }
 export function flipkartProvider(keys:Keys):Provider {
- const status:ProviderStatus={id:'flipkart',status:keys.flipkartId&&keys.flipkartToken?'Configured; access unverified until successful request':'Blocked: affiliate tracking ID and API token required',capabilities:{search:true,details:true,images:true,stock:true,sizes:true,evidence:true,affiliate:true}}
- async function request(endpoint:string,params:Record<string,string>,signal:AbortSignal){const u=new URL('https://affiliate-api.flipkart.net/affiliate/'+endpoint);Object.entries(params).forEach(([k,v])=>u.searchParams.set(k,v));const r=await fetch(u,{redirect:'error',headers:{'Fk-Affiliate-Id':keys.flipkartId,'Fk-Affiliate-Token':keys.flipkartToken},signal:AbortSignal.any([signal,AbortSignal.timeout(20000)])});if(!r.ok)throw new Error(`Flipkart API HTTP ${r.status}; verify existing affiliate access.`);const reader=r.body!.getReader();let size=0;const chunks:Uint8Array[]=[];try{while(true){const p=await reader.read();if(p.done)break;size+=p.value.length;if(size>3_000_000)throw new Error('Catalogue response too large.');chunks.push(p.value)}}finally{await reader.cancel()}return JSON.parse(Buffer.concat(chunks).toString('utf8'))}
- return{status,...(keys.flipkartId&&keys.flipkartToken?{search:async(_c:Category,sub:string,signal:AbortSignal)=>flipkartProducts(await request('1.0/search.json',{query:'women '+sub,resultCount:'10'},signal),keys),details:async(p:PackProduct,signal:AbortSignal)=>{const rows=flipkartProducts(await request('1.0/product.json',{id:p.retailerId},signal),keys);const found=rows.find(x=>x.id===p.id);if(!found)throw new Error('Exact catalogue product not returned.');return{...found,category:p.category,subcategory:p.subcategory,state:p.state,lastUsedAt:p.lastUsedAt}}}:{})}
+ const status:ProviderStatus={id:'flipkart',name:'Flipkart',host:'affiliate-api.flipkart.net',route:'Approved Affiliate API',readiness:keys.flipkartId&&keys.flipkartToken?'configured-unverified':'needs-access',setupAction:'Optional only: reuse an already-approved affiliate account if you have one. Excluded from Auto without saved access; no signup, billing or purchase is required.',status:keys.flipkartId&&keys.flipkartToken?'Configured; access unverified until successful request':'Blocked: existing approved Flipkart affiliate tracking ID and API token required',capabilities:{search:true,details:true,images:true,stock:true,sizes:true,evidence:true,affiliate:true}}
+ async function request(endpoint:string,params:Record<string,string>,signal:AbortSignal){const u=new URL('https://affiliate-api.flipkart.net/affiliate/'+endpoint);Object.entries(params).forEach(([k,v])=>u.searchParams.set(k,v));const r=await fetch(u,{redirect:'error',headers:{'Fk-Affiliate-Id':keys.flipkartId,'Fk-Affiliate-Token':keys.flipkartToken},signal:AbortSignal.any([signal,AbortSignal.timeout(20000)])});if(!r.ok){await r.body?.cancel();throw new Error(`Flipkart API HTTP ${r.status}; verify existing approved affiliate access.`)}const reader=r.body!.getReader();let size=0;const chunks:Uint8Array[]=[];try{while(true){const p=await reader.read();if(p.done)break;size+=p.value.length;if(size>3_000_000)throw new Error('Catalogue response too large.');chunks.push(p.value)}}finally{await reader.cancel()}try{return JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{throw new Error('Flipkart returned an unreadable catalogue response.') }}
+ const provider:Provider={status}
+ if(keys.flipkartId&&keys.flipkartToken){
+  provider.search=async(_c:Category,sub:string,signal:AbortSignal)=>{const raw=await request('1.0/search.json',{query:'women '+sub,resultCount:'10'},signal);if(provider.diagnostics)provider.diagnostics.counts.searchResults+=Array.isArray(raw.productInfoList)?raw.productInfoList.length:0;return flipkartProducts(raw,keys,provider.diagnostics)}
+  provider.details=async(p:PackProduct,signal:AbortSignal)=>{const rows=flipkartProducts(await request('1.0/product.json',{id:p.retailerId},signal),keys);const found=rows.find(x=>x.id===p.id);if(!found)throw new Error('Exact catalogue product not returned.');return{...found,category:p.category,subcategory:p.subcategory,state:p.state,lastUsedAt:p.lastUsedAt}}
+ }
+ return provider
 }
 function productNodes(value:any):any[]{if(Array.isArray(value))return value.flatMap(productNodes);if(!value||typeof value!=='object')return[];return[...(String(value['@type']).split(',').some(t=>t==='Product'||/[/#]Product$/.test(t))?[value]:[]),...Object.values(value).flatMap(productNodes)]}
 export async function listingDetails(p:PackProduct,signal:AbortSignal,diagnostics?:DiscoveryDiagnostics):Promise<PackProduct> {

@@ -2,13 +2,15 @@
 
 A Windows desktop studio for turning product photos into social media posts and reels. Organize products, reusable themes, and character references locally; generate media through your own Google Flow session; review results and export approved images or videos.
 
-**Current version:** `0.13.0-preview.47` (preview).
+**Current version:** `0.13.0-preview.49` (preview).
 
 Frame Studio is an independent personal project and is not affiliated with Google. Google Flow requires internet and an eligible account. Local libraries, image processing, review, and export work offline once the required tools are installed.
 
 ## Ready Post Packs preview
 
 Product Find now includes local pack planning, strict product filters, original photo/link mapping, ZIP export, and authenticated Antigravity reasoning with AI credit overages disabled per session. See [setup and limitations](PRODUCT-FIND.md). Real retailer access and permitted real-pack export remain unverified; this build is for owner testing. Existing data stays in the same Windows profile.
+
+Version preview.49 defaults to **Find my next post**, saved INR 200–1,000 / five-product preferences, automatic clothing coverage and usable-source selection. Customize is optional; original links stay visible on cards. A new documented keyless WooCommerce collection route can use an already-authorized merchant origin. No permitted automatic retailer source is currently configured in the inspected profile, so real collection remains blocked. This version is packaged for owner testing; runtime product collection and real-pack export remain unverified. Technical controls remain in Settings / Product Find Advanced.
 
 ## Features
 
@@ -292,7 +294,7 @@ npm ci
 npm run package:win
 ```
 
-The installer is written to `release/Frame-Studio-0.13.0-preview.47-x64-Setup.exe`. The version comes from `package.json`.
+The installer is written to `release/Frame-Studio-0.13.0-preview.49-x64-Setup.exe`. The version comes from `package.json`.
 
 Alternatively, `npm run build:installer` writes into `release/<version>/`, which avoids replacing an open unpacked build. Installers are unsigned; automatic updates are not configured. Keep installers in GitHub Releases rather than committing them to the source repository.
 

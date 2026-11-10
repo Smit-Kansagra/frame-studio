@@ -54,6 +54,7 @@ const primaryInstance = app.requestSingleInstanceLock()
 let workspace: WorkspaceManager
 let mainWindow: BrowserWindow | undefined
 let quitPrepared = false
+let closeReadyPacks:()=>Promise<void> = async()=>{}
 let flowBrowser: FlowCompanion
 let flowCoordinator: FlowScheduler
 
@@ -510,8 +511,8 @@ if (primaryInstance) void app.whenReady().then(() => {
   collectionTimer.unref()
   registerBridge()
   registerFlowBridge()
-  registerDiscovery(path.join(app.getPath('userData'), 'product-discovery'), authorized)
-  registerReadyPacks(path.join(app.getPath('userData'), 'product-discovery'), authorized)
+  registerDiscovery(path.join(app.getPath('userData'), 'product-discovery'), authorized, false)
+  closeReadyPacks = registerReadyPacks(path.join(app.getPath('userData'), 'product-discovery'), authorized)
 
   protocol.handle('frame-media', async request => {
     const url = new URL(request.url)
@@ -586,5 +587,5 @@ app.on('before-quit', event => {
   if (!workspace || quitPrepared) return
   event.preventDefault()
   quitPrepared = true
-  void (async () => { await flowBrowser.close(); await flowCoordinator.close(); await workspace.close() })().catch(() => undefined).finally(() => app.quit())
+  void (async () => { await closeReadyPacks(); await flowBrowser.close(); await flowCoordinator.close(); await workspace.close() })().catch(() => undefined).finally(() => app.quit())
 })

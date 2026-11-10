@@ -53,7 +53,7 @@ function validate(value:unknown):DiscoverySettings {
   for(const key of [s.youtubeKey,s.geminiKey])if(typeof key!=='string'||key.length>500)throw new Error('Invalid API key.')
   return {...s,channels:channels.join('\n'),pages:s.pages.map(p=>({...p,platforms:[...new Set(p.platforms)]}))}
 }
-export function registerDiscovery(folder:string,authorized:(e:IpcMainInvokeEvent)=>boolean) {
+export function registerDiscovery(folder:string,authorized:(e:IpcMainInvokeEvent)=>boolean,automatic=true) {
   let settings=structuredClone(defaults), products:DiscoveryProduct[]=[], nextRunAt:string|null=null
   let job:ProductFindJob={state:'idle',message:'Add a page and configure a YouTube Data API key.',startedAt:null}
   let controller:AbortController|null=null, mutating=false, persisting=Promise.resolve()
@@ -124,9 +124,9 @@ export function registerDiscovery(folder:string,authorized:(e:IpcMainInvokeEvent
 
     })().catch(e=>{job={...job,state:abort.signal.aborted?'cancelled':'error',message:abort.signal.aborted?'Discovery cancelled.':e instanceof Error?e.message:'Discovery failed.'}}).finally(()=>{controller=null})
   }
-  const timer=setInterval(()=>{void ready.then(async()=>{if(controller||mutating||!nextRunAt||Date.parse(nextRunAt)>Date.now())return;const pages=settings.pages.filter(p=>p.autoRefresh);nextRunAt=pages.length?new Date(Date.now()+6*3600000).toISOString():null;await persist();for(const p of pages){if(controller)break;await start(p.id);while(controller)await new Promise(resolve=>setTimeout(resolve,500));}}).catch(e=>{job={...job,state:'error',message:e.message}})},30000);timer.unref();app.on('before-quit',()=>{clearInterval(timer);controller?.abort()})
+  const timer=setInterval(()=>{if(!automatic)return;void ready.then(async()=>{if(controller||mutating||!nextRunAt||Date.parse(nextRunAt)>Date.now())return;const pages=settings.pages.filter(p=>p.autoRefresh);nextRunAt=pages.length?new Date(Date.now()+6*3600000).toISOString():null;await persist();for(const p of pages){if(controller)break;await start(p.id);while(controller)await new Promise(resolve=>setTimeout(resolve,500));}}).catch(e=>{job={...job,state:'error',message:e.message}})},30000);timer.unref();app.on('before-quit',()=>{clearInterval(timer);controller?.abort()})
   const handlers:Record<string,(...args:any[])=>Promise<unknown>>={
-    status:async():Promise<DiscoveryState>=>{await ready;allowDiscoveryImages(products.map(p=>p.image_url));return{settings:{...settings,youtubeKey:'',geminiKey:'',hasYoutubeKey:!!settings.youtubeKey,hasGeminiKey:!!settings.geminiKey},products,job:{...job},nextRunAt}},
+    status:async():Promise<DiscoveryState>=>{await ready;allowDiscoveryImages(products.map(p=>p.image_url));return{settings:{...settings,youtubeKey:'',geminiKey:'',hasYoutubeKey:!!settings.youtubeKey,hasGeminiKey:!!settings.geminiKey},products,job:{...job},nextRunAt:automatic?nextRunAt:null}},
     save:async value=>{await ready;if(controller||mutating)throw new Error('Stop discovery before editing settings.');mutating=true;try{const next=validate(value);next.youtubeKey=next.youtubeKey||settings.youtubeKey;next.geminiKey='';if((next.youtubeKey||next.geminiKey)&&!safeStorage.isEncryptionAvailable())throw new Error('Windows credential encryption is unavailable.');await mkdir(folder,{recursive:true});await writeFile(secrets+'.tmp',safeStorage.encryptString(JSON.stringify({youtubeKey:next.youtubeKey,geminiKey:next.geminiKey})));await rename(secrets+'.tmp',secrets);settings=next;nextRunAt=settings.pages.some(p=>p.autoRefresh)?new Date(Date.now()+6*3600000).toISOString():null;await persist()}finally{mutating=false}},
     start:async id=>start(id),cancel:async()=>{controller?.abort()},
     copy:async(id,url)=>{await ready;const p=products.find(p=>p.pageId===id&&p.product_url===url);if(!p)throw new Error('Product not found.');clipboard.writeText(p.product_url)},

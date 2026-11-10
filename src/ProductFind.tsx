@@ -1,25 +1,124 @@
-import { useEffect, useState } from 'react'
-import type { PackAction, PackSettings, PackStore, Performance, ReadyPack } from '../electron/ready-packs-types.cjs'
-import { LegacyDiscovery } from './LegacyDiscovery'
+import { useEffect, useRef, useState } from 'react'
+import type { FindSelection, PackAction, PackProduct, PackStore } from '../electron/ready-packs-types.cjs'
 import './product-find.css'
 
-const emptyPerformance = ():Performance => ({postUrl:'',publishedAt:new Date().toISOString().slice(0,10),source:'Manual Instagram Insights',window:'First 7 days',observedAt:new Date().toISOString(),reach:null,saves:null,shares:null,clicks:null,orders:null,commission:null})
-export function ProductFind(){
- const api=window.frameStudio?.readyPacks
- const [state,setState]=useState<PackStore|null>(null),[settings,setSettings]=useState<PackSettings|null>(null),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[selected,setSelected]=useState(''),[urls,setUrls]=useState(''),[refs,setRefs]=useState(''),[licenceText,setLicenceText]=useState('')
- const [keys,setKeys]=useState({flipkartId:'',flipkartToken:'',imagePermission:''}),[feedback,setFeedback]=useState<Performance>(emptyPerformance)
- useEffect(()=>{if(!api)return;let alive=true,pending=false;async function refresh(){if(pending)return;pending=true;try{const s=await api!.status();if(alive){setState(s);setSettings(old=>old??s.settings)}}catch(e){if(alive)setError(String(e))}finally{pending=false}}void refresh();const t=setInterval(()=>void refresh(),2500);return()=>{alive=false;clearInterval(t)}},[api])
- async function act(a:PackAction){if(!api)return;setBusy(true);setError('');setNotice('');try{const result=await api.action(a);setState(await api.status());setNotice(typeof result==='string'?result:'Done.')}catch(e){setError(e instanceof Error?e.message:String(e))}finally{setBusy(false)}}
- const queue=state?.packs.filter(p=>['drafted','exported'].includes(p.state))??[],pack=state?.packs.find(p=>p.id===selected)??queue[0],locked=busy||state?.job.state==='running'
- useEffect(()=>{if(pack&&api)void api.action({type:'refresh',packId:pack.id}).then(()=>api.status()).then(setState).catch(e=>setError(String(e)))},[api,pack?.id])
- const choose=(p:ReadyPack)=>{setSelected(p.id);setFeedback(p.performance.at(-1)??emptyPerformance());setRefs(p.references.join('\n'));void act({type:'refresh',packId:p.id})}
- const button=(label:string,a:PackAction,disabled=false)=><button className="button button-secondary" disabled={!api||locked||disabled} onClick={()=>void act(a)}>{label}</button>
- return <div className="product-find"><section className="find-setup"><div className="find-heading"><h2>Ready Post Packs</h2><span>India | affordable women's fashion</span></div><p>One shopping theme per pack. Original listing photos and exact links. Collection pauses when Frame Studio closes.</p><div className="find-actions">{button('Generate next pack',{type:'generate'},queue.length>=3)}{button('Import CSV / JSON / URLs',{type:'import'})}{state?.job.state==='running'&&<button className="button" disabled={busy} onClick={()=>void act({type:'cancel'})}>Cancel collection</button>}</div><p role="status">{state?.job.message??'Loading local pack library...'}</p>{state&&<p>Next due: {new Date(state.job.dueAt).toLocaleString()} | {queue.length}/3 prepared packs</p>}{error&&<p role="alert" className="prompt-validation-error">{error}</p>}{notice&&<p role="status">{notice}</p>}
- <details><summary>Sources, setup and imports</summary><fieldset disabled={locked} className="discovery-fields"><legend>Antigravity account reasoning</legend><p>{state?.aiStatus?.message??'Connection not tested. No local model required.'}</p><p>CLI: {state?.aiStatus?.cliVersion??'not checked'} | Model: {state?.aiStatus?.selectedModel??'not checked'} | Overages off: {state?.aiStatus?.noOverageVerified?'verified for session':'not verified'} | Quota remaining: unknown | Last successful call: {state?.aiStatus?.lastSuccessfulCall??'none'}</p>{settings&&<><label>Reasoning provider<select value={settings.ai?.provider??'antigravity'} onChange={e=>setSettings({...settings,ai:{provider:e.target.value as 'antigravity'|'none',model:settings.ai?.model??'',effort:settings.ai?.effort??'medium'}})}><option value="antigravity">Authenticated Antigravity account</option><option value="none">Code only (explicit fallback)</option></select></label><label>Account model<select value={settings.ai?.model??''} onChange={e=>setSettings({...settings,ai:{provider:settings.ai?.provider??'antigravity',model:e.target.value,effort:settings.ai?.effort??'medium'}})}><option value="">Automatic: listed moderate-effort model</option>{state?.aiStatus?.models.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select></label><label>Reasoning effort<select value={settings.ai?.effort??'medium'} onChange={e=>setSettings({...settings,ai:{provider:settings.ai?.provider??'antigravity',model:settings.ai?.model??'',effort:e.target.value as 'medium'|'high'}})}><option value="medium">Moderate (default)</option><option value="high">High (optional; more account quota)</option></select></label>{button('Save reasoning settings',{type:'settings',value:settings})}</>}{button('Test Antigravity account (one bounded call)',{type:'ai-test'})}<p>Session AI-credit overages are disabled and verified before requests. No API keys or paid fallback. Text-only supplied evidence; product photos are not inspected by AI.</p></fieldset>{state?.providers.map(p=><p key={p.id}><strong>{p.id}</strong>: {p.status}<br/>{Object.entries(p.capabilities).map(([k,v])=>k+': '+(v?'supported':'unsupported')).join(' | ')}</p>)}{state?.diagnostics?.map((d,i)=><details key={i}><summary>Discovery stages: {d.query}</summary><pre className="find-path">{JSON.stringify(d,null,2)}</pre></details>)}<fieldset disabled={locked} className="discovery-fields"><legend>Flipkart affiliate catalogue access</legend><label>Tracking ID<input autoComplete="off" value={keys.flipkartId} onChange={e=>setKeys({...keys,flipkartId:e.target.value})}/></label><label>API token (blank preserves saved credentials)<input type="password" autoComplete="off" value={keys.flipkartToken} onChange={e=>setKeys({...keys,flipkartToken:e.target.value})}/></label><label>Image export permission evidence (leave blank if unknown)<input placeholder="Licence or retailer permission covering your intended Instagram use" value={keys.imagePermission} onChange={e=>setKeys({...keys,imagePermission:e.target.value})}/></label>{button('Save encrypted access',{type:'credentials',value:keys})}<label>Provider/account licence JSON (record once; exact scope and expiry)<textarea rows={5} value={licenceText} onChange={e=>setLicenceText(e.target.value)}/></label><button className="button button-secondary" disabled={locked} onClick={()=>{try{void act({type:'licence',value:JSON.parse(licenceText)})}catch{setError('Enter valid licence JSON with an actual permission reference.')}}}>Record provider licence</button><p>Free-text legacy image permission does not grant rights. Use a genuine scoped licence.</p><p>Requires existing approved Flipkart Affiliate API access. Configured does not mean connected. No paid fallback.</p></fieldset><label>Import product URLs or feed text<textarea rows={4} value={urls} onChange={e=>setUrls(e.target.value)}/></label>{button('Import text',{type:'import-text',value:urls})}<p>URL imports preserve candidates even when verification fails. Feed fields and image permissions are documented in PRODUCT-FIND.md.</p></details>
- <details><summary>Planner and category budgets</summary>{settings&&<fieldset disabled={locked} className="discovery-fields"><label>Clothes per pack<select value={settings.size} onChange={e=>setSettings({...settings,size:Number(e.target.value)})}>{[4,5,6].map(n=><option key={n}>{n}</option>)}</select></label><label>Product cooldown (days)<input type="number" min={0} max={365} value={settings.cooldownDays} onChange={e=>setSettings({...settings,cooldownDays:Number(e.target.value)})}/></label>{(['season','occasion','attributes'] as const).map(k=><label key={k}>{k}<input value={settings[k]} onChange={e=>setSettings({...settings,[k]:e.target.value})}/></label>)} <label><input type="checkbox" checked={settings.scheduled} onChange={e=>setSettings({...settings,scheduled:e.target.checked})}/>Prepare up to three packs while app is open</label><p>Plus-size, petite and tall are audience attributes across categories. They do not replace category slots.</p>{settings.categories.map((c,i)=><details key={c.id}><summary>{c.name} | INR {c.min}-{c.max}{c.deferred?' | deferred':''}</summary>{(['name','min','max','deferred'] as const).map(k=><label key={k}>{k}<input type={k==='min'||k==='max'?'number':'text'} value={c[k]} onChange={e=>setSettings({...settings,categories:settings.categories.map((x,j)=>j===i?{...x,[k]:k==='min'||k==='max'?Number(e.target.value):e.target.value}:x)})}/></label>)}<label>Subcategories (one per line)<textarea value={c.subcategories.join('\n')} onChange={e=>setSettings({...settings,categories:settings.categories.map((x,j)=>j===i?{...x,subcategories:e.target.value.split('\n')}:x)})}/></label></details>)}{button('Save planner settings',{type:'settings',value:settings})}</fieldset>}</details></section>
- <section className="find-setup"><h2>Today's recommendation</h2><div className="find-actions">{queue.map((p,i)=><button className="button button-secondary" key={p.id} disabled={locked} onClick={()=>choose(p)}>{i+1}. {p.theme} ({p.productIds.length}/{p.requested})</button>)}</div>{!queue.length&&<p>No prepared packs. Configure a discovery source, then generate the next pack.</p>}</section>
- {pack&&<section className="find-setup"><h2>{pack.theme}</h2>{pack.ai&&<details><summary>AI selection and supplied evidence</summary><p>Future theme suggestion: {pack.ai.suggestion.subcategory} ({pack.ai.suggestion.reason}); coverage is unchanged.</p><ul>{pack.ai.selection.map(s=><li key={s.id}>{state?.products.find(p=>p.id===s.id)?.title??s.id}: {s.reason==='theme-fit'?'Fits supplied theme evidence':s.reason==='colour-variety'?'Adds colour variety':s.reason==='cut-variety'?'Adds cut variety':'Evidence is limited'} | Supplied evidence: {s.refs.join(', ')}</li>)}</ul>{pack.ai.commissions.map(c=><p key={c.id}>Commission conditions for {c.id}: {c.interpretation}; evidence {c.refs.join(', ')}</p>)}</details>}<p>{pack.state} | {pack.productIds.length}/{pack.requested} clothes</p>{pack.reasons.map((r,i)=><p key={i}>{r}</p>)}<div className="find-actions">{button('Download pack ZIP',{type:'export',packId:pack.id})}{button('Copy all original links',{type:'copy',packId:pack.id})}{button('Refresh listing facts',{type:'refresh',packId:pack.id})}{button('Skip theme',{type:'skip',packId:pack.id},pack.state==='posted')}</div><div className="find-grid">{pack.productIds.map((id,i)=>{const p=state!.products.find(p=>p.id===id)!;return <article className="find-card" key={id}><div className="find-photo">{p.images[0]?<img src={p.images[0].url} alt={p.title} loading="lazy" referrerPolicy="no-referrer"/>:<p>Original photo unavailable; candidate retained.</p>}</div><h3>{i+1}. {p.title}</h3><p>{p.currency} {p.price??'Price unknown'} | {p.variant}</p><p>Stock: {p.stock} | Sizes: {p.sizes.join(', ')||'unknown'}</p><p>Observed: {p.observedAt?new Date(p.observedAt).toLocaleString():'unknown'}</p><p>{p.assessment.fit}</p><p>{p.assessment.demand}</p><p>Image export: {p.images.length&&p.images.every(i=>i.permission==='permitted')?'permission recorded':'not ready'}</p><div className="find-actions">{button('Original listing',{type:'open',packId:pack.id,productId:id})}{button('Replace',{type:'replace',packId:pack.id,productId:id},pack.state==='posted')}</div><details><summary>Evidence and unknowns</summary><p>{p.assessment.readiness}</p><p>Estimated commission: {p.commissionEstimateInr==null?'unknown':'INR '+p.commissionEstimateInr+' (conditional; not approved)'}</p><p>Match: {p.match}; affiliate: {p.affiliateStatus}</p>{p.failures.map((f,i)=><p key={i}>{f}</p>)}{p.evidence.map((e,i)=><p key={i}>{e.kind} | {e.at}<br/>{e.note}<br/>{e.url}</p>)}{p.images.map(im=><p key={im.url}>Photo source: {im.source}<br/>Permission: {im.permissionNote||'Unknown'}</p>)}</details></article>})}</div>
- <details><summary>Posting and optional performance</summary>{button('Import performance JSON',{type:'import-feedback'})}<fieldset className="discovery-fields" disabled={locked}>{(['postUrl','publishedAt','source','window'] as const).map(k=><label key={k}>{k}<input type={k==='publishedAt'?'date':'text'} value={feedback[k]} onChange={e=>setFeedback({...feedback,[k]:e.target.value})}/></label>)}{(['reach','saves','shares','clicks','orders','commission'] as const).map(k=><label key={k}>{k}<input type="number" min={0} value={feedback[k]??''} onChange={e=>setFeedback({...feedback,[k]:e.target.value===''?null:Number(e.target.value)})}/></label>)}{button('Mark posted',{type:'posted',packId:pack.id,value:{...feedback,observedAt:new Date().toISOString()}})}{button('Save performance observation',{type:'feedback',packId:pack.id,value:{...feedback,observedAt:new Date().toISOString()}})}<p>Pack-level metrics only. Unknown sales remain blank. Coverage repeats require comparable observations across multiple posted packs.</p></fieldset></details><details><summary>Reference posts</summary><textarea value={refs} onChange={e=>setRefs(e.target.value)} placeholder="Optional Instagram or YouTube references; one URL per line"/>{button('Save references',{type:'references',packId:pack.id,value:refs.split(/\s+/).filter(Boolean)})}</details></section>}
- <section className="find-setup"><h2>Upcoming category coverage</h2><p>56 slots over eight weeks. Unposted packs do not indicate unsuccessful categories.</p><ol>{state?.plan.filter(s=>s.state==='pending').slice(0,7).map(s=><li key={s.id}>Week {s.week}: {s.subcategory}</li>)}</ol><details><summary>View full eight-week plan</summary><ol>{state?.plan.map(s=><li key={s.id}>Week {s.week}, slot {s.day}: {s.subcategory} | {s.variation} | {s.state}{s.reason?' | '+s.reason:''}</li>)}</ol></details><details><summary>History and retained candidates ({state?.products.length??0})</summary>{state?.packs.filter(p=>!queue.includes(p)).map(p=><p key={p.id}><button className="button button-secondary" disabled={locked} onClick={()=>choose(p)}>{p.theme} | {p.state}</button></p>)}<p>{state?.products.filter(p=>p.state==='candidate').length??0} unselected candidates retained. Unknown categories, prices and exact variants never earn positive verification points.</p></details></section>
- <details className="find-setup"><summary>Existing YouTube setup and legacy product library</summary><LegacyDiscovery/></details></div>
+const storeNames: Record<string, string> = { meesho: 'Meesho', flipkart: 'Flipkart', amazon: 'Amazon', myntra: 'Myntra', ajio: 'AJIO', libas: 'Libas' }
+const defaults: FindSelection = { category: 'auto', min: 200, max: 1000, size: 5, stores: [], mode: 'auto', storeMode: 'auto' }
+export function ProductFind() {
+  const api = window.frameStudio?.readyPacks
+  const [state, setState] = useState<PackStore | null>(null)
+  const [selection, setSelection] = useState<FindSelection | null>(null)
+  const [customize, setCustomize] = useState(false)
+  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('')
+  const [brokenPhotos, setBrokenPhotos] = useState<Record<string, string>>({})
+  const refreshed = useRef('')
+  useEffect(() => {
+    if (!api) return
+    let alive = true, pending = false
+    const refresh = async () => {
+      if (pending) return
+      pending = true
+      try {
+        const next = await api.status()
+        if (alive) { setState(next); setSelection(old => old ?? next.preferences ?? defaults) }
+      } catch (e) { if (alive) setError(e instanceof Error ? e.message : String(e)) }
+      finally { pending = false }
+    }
+    void refresh()
+    const timer = setInterval(() => void refresh(), 2000)
+    return () => { alive = false; clearInterval(timer) }
+  }, [api])
+  const running = state?.job.state === 'running', locked = busy || running
+  const pack = state?.searchSession ? state.packs.find(p => p.id === state.searchSession?.packId)
+    : state?.packs.filter(p => p.productIds.length && ['drafted', 'exported'].includes(p.state)).at(-1)
+  async function act(action: PackAction, success = '') {
+    if (!api) return
+    setBusy(true); setError(''); setNotice('')
+    try {
+      const result = await api.action(action)
+      setState(await api.status())
+      if (success) setNotice(success)
+      else if (action.type === 'export' && typeof result === 'string') setNotice('Saved: ' + result)
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+    finally { setBusy(false) }
+  }
+  // Opening saved results refreshes stale facts through authorized provider capabilities.
+  useEffect(() => {
+    if (!api || !pack || running || refreshed.current === pack.id) return
+    refreshed.current = pack.id
+    void act({ type: 'refresh', packId: pack.id })
+  }, [api, pack?.id, running])
+  const products = pack?.productIds.flatMap((id, index) => {
+    const p = state?.products.find(p => p.id === id)
+    return p && state?.reviewableIds?.[pack.id]?.includes(id) ? [{ p, number: index + 1 }] : []
+  }) ?? []
+  const permitted = (p: PackProduct) => p.images.length > 0 && p.images.every(i => i.variant === p.variant && i.permission === 'permitted' && !!i.permissionNote.trim())
+  const exportReady = !!pack && products.length === pack.productIds.length && products.length > 0 && products.every(({ p }) => permitted(p) && !p.images.some(i => brokenPhotos[p.id] === i.url))
+  const incomplete = !!state?.searchSession && !!pack && products.length > 0 && ['drafted', 'exported'].includes(pack.state) && products.length < pack.requested
+  const shownStores = state?.providers ?? []
+  const setupRequired = state?.actionableError?.code === 'source-setup' || state?.actionableError?.code === 'source-blocked'
+  const categoryName = selection?.category === 'auto' ? 'Auto theme' : state?.settings.categories.find(c => c.id === selection?.category)?.name ?? 'Saved category'
+  return <div className="product-find">
+    <section className="find-setup">
+      <div className="find-heading"><h2>Your next clothing post</h2><a href="#settings">Settings</a></div>
+      <div className="find-actions"><button className="button button-primary" disabled={!api || locked || !selection} onClick={() => void act({ type: 'next', value: selection })}>Find my next post</button>
+        {running && <button className="button button-secondary" disabled={busy} onClick={() => void act({ type: 'cancel' })}>{busy ? 'Stopping…' : 'Cancel'}</button>}
+      </div>
+      <button className="find-preference-summary" aria-expanded={customize} aria-controls="find-customize" onClick={() => setCustomize(open => !open)}>Women’s fashion · ₹{selection?.min ?? 200}–₹{selection?.max ?? 1000} · {selection?.size ?? 5} products · {selection?.storeMode === 'manual' ? 'Store override' : 'Auto stores'} · {categoryName}</button>
+      <details id="find-customize" open={customize} onToggle={e => setCustomize(e.currentTarget.open)}><summary>Customize</summary>
+        <form onSubmit={e => { e.preventDefault(); if (selection) void act({ type: 'preferences', value: selection }, 'Preferences saved for future searches.') }}>
+          <fieldset className="find-controls" disabled={locked || !selection}>
+            <label>Clothing choice<select value={selection?.category ?? 'auto'} onChange={e => setSelection(s => s ? { ...s, category: e.target.value, mode: e.target.value === 'auto' && s.storeMode === 'auto' ? 'auto' : 'custom' } : s)}><option value="auto">Auto: coverage and available inventory</option>{state?.settings.categories.map(c => <option key={c.id} value={c.id} disabled={!!c.deferred}>{c.name} (manual override){c.deferred ? ' — deferred' : ''}</option>)}</select></label>
+            <label>Minimum INR<input type="number" min="0" max="10000000" step="1" required value={selection && Number.isFinite(selection.min) ? selection.min : ''} onChange={e => setSelection(s => s ? { ...s, min: e.target.valueAsNumber } : s)} /></label>
+            <label>Maximum INR<input type="number" min={selection && Number.isFinite(selection.min) ? selection.min : 0} max="10000000" step="1" required value={selection && Number.isFinite(selection.max) ? selection.max : ''} onChange={e => setSelection(s => s ? { ...s, max: e.target.valueAsNumber } : s)} /></label>
+            <label>Products<select value={selection?.size ?? 5} onChange={e => setSelection(s => s ? { ...s, size: Number(e.target.value) } : s)}>{[4, 5, 6].map(n => <option key={n} value={n}>{n}</option>)}</select></label>
+            <label className="find-auto-toggle"><input type="checkbox" checked={selection?.storeMode !== 'manual'} onChange={e => setSelection(s => s ? { ...s, storeMode: e.target.checked ? 'auto' : 'manual', stores: e.target.checked ? [] : shownStores.filter(p => ['configured-unverified', 'accessible'].includes(p.readiness ?? '')).map(p => p.id), mode: e.target.checked && s.category === 'auto' ? 'auto' : 'custom' } : s)} />Auto stores</label>
+            {selection?.storeMode === 'manual' && <div className="find-marketplaces">{shownStores.map(p => <label key={p.id} title={p.status}><input type="checkbox" checked={selection.stores.includes(p.id)} disabled={p.readiness === 'needs-access' || p.readiness === 'unsupported'} onChange={e => setSelection(s => s ? { ...s, stores: e.target.checked ? [...s.stores, p.id] : s.stores.filter(id => id !== p.id) } : s)} />{p.name ?? storeNames[p.id] ?? p.id}</label>)}</div>}
+          </fieldset>
+          <p>Saved range is a hard limit. Manual clothing overrides never change automatically.</p>
+          <button className="button button-secondary" type="submit" disabled={locked || !selection}>Save preferences</button>
+        </form>
+      </details>
+      <p role="status" aria-live="polite">{state?.job.message ?? (api ? 'Loading your saved defaults…' : 'Open Frame Studio desktop to find products.')}</p>
+      {running && <progress aria-label="Finding and verifying products" />}
+      {error && <p role="alert" className="prompt-validation-error">{error}</p>}{notice && <p role="status">{notice}</p>}
+      {state?.actionableError && <div className="find-access-notice" role="status"><strong>{setupRequired ? 'Product source setup required' : 'Collection needs attention'}</strong><p>{state.actionableError.message}</p><a href="#settings">{setupRequired ? 'Review available source options in Settings' : state.actionableError.action}</a></div>}
+    </section>
+    {pack && <section className="find-setup">
+      <div className="find-heading"><h2>{pack.subcategory} · INR {pack.min}–{pack.max}</h2><span>{products.length}/{pack.requested} products found{products.length < pack.requested ? ' · Partial results' : ''}</span></div>
+      {state?.searchSession?.themeReason && <p>{state.searchSession.themeReason}</p>}
+      {!!state?.searchSession?.messages.length && !setupRequired && <p>Some source requests could not qualify products. Verified results are kept; source details are in Settings.</p>}
+      <p>{exportReady ? 'Photo export ready.' : 'Photo permission required or listing refresh needed. You can review products and copy their links.'}</p>
+      {products.length < pack.productIds.length && <><p>Some saved products need fresh listing facts or a matching photo. They are hidden until verified.</p>{pack.productIds.map((id, index) => !state?.reviewableIds?.[pack.id]?.includes(id) && <button key={id} className="button button-secondary" disabled={locked || !['drafted', 'exported'].includes(pack.state)} onClick={() => void act({ type: 'replace', packId: pack.id, productId: id })}>Replace unverified item #{index + 1}</button>)}</>}
+      <div className="find-actions">
+        <button className="button button-secondary" disabled={locked || !products.length || products.length !== pack.productIds.length} onClick={() => void act({ type: 'copy', packId: pack.id }, 'Numbered original product links copied.')}>Copy all product links</button>
+        <button className="button button-primary" disabled={locked || !exportReady} onClick={() => void act({ type: 'export', packId: pack.id })}>Download photos + links</button>
+        {incomplete && <button className="button button-secondary" disabled={locked} onClick={() => void act({ type: 'more', packId: pack.id })}>Find more matching products</button>}
+        <button className="button button-secondary" disabled={locked || !['drafted', 'exported'].includes(pack.state)} onClick={() => void act({ type: 'done', packId: pack.id })}>Done</button>
+        <button className="button button-secondary" disabled={locked || !['drafted', 'exported'].includes(pack.state)} onClick={() => void act({ type: 'next', packId: pack.id, value: selection })}>Done / Next collection</button>
+      </div>
+      <div className="find-grid">{products.map(({ p, number }) => {
+        const photo = p.images.find(i => i.variant === p.variant && i.source === p.url) ?? p.images.find(i => i.variant === p.variant)
+        return <article className="find-card" key={p.id}>
+          <div className="find-photo">{photo && brokenPhotos[p.id] !== photo.url ? <img src={photo.url} alt={p.title} loading="lazy" referrerPolicy="no-referrer" onError={() => setBrokenPhotos(old => ({ ...old, [p.id]: photo.url }))} /> : <p>Photo could not load. Open the original listing or replace this product.</p>}</div>
+          <div className="find-heading"><strong>#{number}</strong><span className="neutral-badge">{state?.providers.find(source => source.id === p.retailer)?.name ?? storeNames[p.retailer] ?? p.retailer}</span></div>
+          <h3>{p.title}</h3><p className="find-price">₹{p.price?.toLocaleString('en-IN')}</p><p>{p.variant}</p>
+          <p className="find-observed">Observed {p.observedAt ? new Date(p.observedAt).toLocaleString() : 'unknown'}. Stock: {p.stock}. Sizes: {p.sizes.join(', ') || 'unknown'}.</p>
+          <a className="find-product-link" href={p.url} title={p.url} onClick={e => { e.preventDefault(); void act({ type: 'open', packId: pack.id, productId: p.id }) }}>{p.url}</a>
+          <input className="find-selectable-link" aria-label={'Full original product URL ' + number} readOnly value={p.url} onFocus={e => e.target.select()} />
+          {p.affiliateStatus === 'account-api' && p.affiliateUrl ? <><span>Account affiliate link</span>
+            <a className="find-product-link" href={p.affiliateUrl} title={p.affiliateUrl} onClick={e => { e.preventDefault(); void act({ type: 'open-affiliate', packId: pack.id, productId: p.id }) }}>{p.affiliateUrl}</a>
+            <button className="button button-secondary" disabled={locked} onClick={() => void act({ type: 'copy-affiliate', packId: pack.id, productId: p.id }, 'Affiliate link copied.')}>Copy affiliate link</button>
+          </> : <p>Original link — convert in EarnKaro</p>}
+          <p>{permitted(p) ? 'Photo permission recorded' : 'Photo permission required for download'}</p>
+          <div className="find-actions">
+            <button className="button button-secondary" disabled={locked} onClick={() => void act({ type: 'open', packId: pack.id, productId: p.id })}>Open product</button>
+            <button className="button button-secondary" disabled={locked} onClick={() => void act({ type: 'copy-product', packId: pack.id, productId: p.id }, 'Original product link copied.')}>Copy original link</button>
+            <button className="button button-secondary" disabled={locked || !['drafted', 'exported'].includes(pack.state)} onClick={() => void act({ type: 'replace', packId: pack.id, productId: p.id })}>Replace</button>
+          </div>
+        </article>
+      })}</div>
+    </section>}
+    {!pack && state?.searchSession && !running && !setupRequired && <section className="find-empty"><p>No collection qualifies yet. Your saved budget and manual overrides remain unchanged. No coverage was consumed.</p></section>}
+  </div>
 }
