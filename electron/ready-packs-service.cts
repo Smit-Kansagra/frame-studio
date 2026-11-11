@@ -5,7 +5,7 @@ import { commissionEstimate } from './ready-packs-ai.cjs'
 import type { PackAdvice, FindSelection, PlanSlot } from './ready-packs-types.cjs'
 import { applyLicences } from './ready-packs-licences.cjs'
 import { discoveryDiagnostics, reject } from './ready-packs-diagnostics.cjs'
-import { PackRepository, assemble, canonical, defaultFindSelection, eligible, matchingPhoto, photoReady, reviewable, selectProducts, storePriority, validateSelection, validateSettings, validateStoreRanks } from './ready-packs-core.cjs'
+import { budgetMaximum, PackRepository, assemble, canonical, defaultFindSelection, eligible, matchingPhoto, photoReady, reviewable, selectProducts, storePriority, validateSelection, validateSettings, validateStoreRanks } from './ready-packs-core.cjs'
 import { classify, importProducts } from './ready-packs-providers.cjs'
 import type { Provider } from './ready-packs-providers.cjs'
 import type { PackStore, PackProduct, Performance, ReadyPack } from './ready-packs-types.cjs'
@@ -31,6 +31,14 @@ export class PackService {
  constructor(readonly repository:PackRepository,private providers:()=>Promise<Provider[]>,private reasoning?:(store:PackStore,slot:PlanSlot,signal:AbortSignal)=>Promise<PackAdvice|null>) {this.ready=this.repository.load().then(s=>{this.state=s})}
  get busy(){return this.locked||!!this.active}
  get searching(){return !!this.active}
+ async connectionStatus(){
+  const copy=await this.status()
+  if(copy.actionableError?.code!=='source-setup'||this.busy)return copy
+  const preferences=copy.preferences??defaultFindSelection()
+  const available=copy.providers.filter(p=>['configured-unverified','accessible'].includes(p.readiness??'')&&(preferences.storeMode==='auto'||preferences.stores.includes(p.id))&&storePriority(p.id,copy.settings.storeRanks)<=(preferences.maxStorePriority??100))
+  if(available.length){copy.actionableError=undefined;if(copy.job.state==='error'&&copy.job.message==='Product source setup required')copy.job={...copy.job,state:'idle',message:'Chrome connected. Click Find my next post to start a new search.'}}
+  return copy
+ }
  async status(){await this.ready;this.state.providers=(await this.providers()).map(p=>sourceStatus(p,this.state));for(const p of this.state.products){applyLicences(p,this.state.licences??[]);p.commissionEstimateInr=commissionEstimate(p)}const copy=structuredClone(this.state);copy.reviewableIds=Object.fromEntries(copy.packs.map(pack=>[pack.id,pack.productIds.filter(id=>{const p=copy.products.find(p=>p.id===id);return !!p&&reviewable(p,pack)})]));return copy}
  async mutate(work:()=>Promise<void>){await this.ready;if(this.busy)throw new Error('A search is running. Cancel or wait before editing.');this.locked=true;const before=structuredClone(this.state);try{await work();await this.repository.save(this.state)}catch(e){this.state=before;throw e}finally{this.locked=false}}
  async cancel(){this.active?.abort();await this.running}
@@ -48,7 +56,7 @@ export class PackService {
   const preferences=validateSelection(value??this.state.preferences??defaultFindSelection(),this.state.settings)
   if(doneId)await this.done(doneId)
   const session=this.state.searchSession,pack=session?.packId?this.pack(session.packId):null
-  if(pack&&['drafted','exported'].includes(pack.state)&&pack.productIds.length<pack.requested&&session&&preferences.category===session.selection.category&&preferences.min===session.selection.min&&preferences.max===session.selection.max&&preferences.size===session.selection.size&&preferences.storeMode===session.selection.storeMode)return this.find(session.selection,true)
+  if(pack&&['drafted','exported'].includes(pack.state)&&pack.productIds.length<pack.requested&&session&&preferences.category===session.selection.category&&preferences.min===session.selection.min&&preferences.max===session.selection.max&&(preferences.extraBudgetInr??0)===(session.selection.extraBudgetInr??0)&&(preferences.maxStorePriority??100)===(session.selection.maxStorePriority??100)&&preferences.size===session.selection.size&&preferences.storeMode===session.selection.storeMode)return this.find(session.selection,true)
   return this.find(preferences)
  }
  async find(value:unknown,more=false,replacement?:string){
@@ -59,11 +67,13 @@ export class PackService {
    if(!more)this.state.preferences=preferences
    const providers=await this.providers(),ready=providers.filter(p=>sourceReady(p,this.state));this.state.providers=providers.map(p=>sourceStatus(p,this.state))
    const selection:FindSelection={...preferences,storeRanks:structuredClone(more?preferences.storeRanks??{}:this.state.settings.storeRanks??{}),stores:more||preferences.storeMode!=='auto'?preferences.stores:ready.map(p=>p.status.id)}
+   selection.stores=selection.stores.filter(id=>storePriority(id,selection.storeRanks)<=(selection.maxStorePriority??100))
    selection.stores.sort((a,b)=>storePriority(a,selection.storeRanks)-storePriority(b,selection.storeRanks))
    const usable=ready.filter(p=>selection.stores.includes(p.status.id))
    if(!usable.length){
-    const paused=providers.some(p=>this.state.sourceHealth?.[p.status.id]?.state==='blocked')
-    const reason=paused?'Previously blocked source access is paused. Review its restriction in Settings before an explicit recheck.':'Pair Chrome in Settings / Product Find / Chrome product collection for this app session. Allow the shopping sites in the companion, then click Find my next post. Opening a website alone does not pair it. No paid API or affiliate-link conversion is required.'
+    const selectedSources=providers.filter(p=>(preferences.storeMode==='auto'||preferences.stores.includes(p.status.id))&&storePriority(p.status.id,selection.storeRanks)<=(selection.maxStorePriority??100))
+    const paused=selectedSources.some(p=>this.state.sourceHealth?.[p.status.id]?.state==='blocked'||sourceStatus(p,this.state).readiness==='paused')
+    const reason=!selectedSources.length?'No source meets your saved store selection and priority cutoff. Review Customize; the cutoff was not relaxed.':'No selected source is ready. '+selectedSources.map(p=>{const status=sourceStatus(p,this.state);return(status.name??status.id)+': '+status.status}).join(' | ')
     this.state.actionableError={code:paused?'source-blocked':'source-setup',message:reason,action:'Review Product Find source access in Settings'}
     this.state.job={state:'error',message:'Product source setup required',dueAt:new Date().toISOString(),attempts:0}
     await this.repository.save(this.state);return
@@ -71,7 +81,7 @@ export class PackService {
    const themes=more&&this.state.searchSession?[{slot:structuredClone(this.state.searchSession.slot),reason:this.state.searchSession.themeReason??'Continuing the same collection; theme, stores and budget unchanged.'}]:nextThemes(this.state,selection)
    if(!themes.length)throw new Error('No category is enabled for these preferences. Enable a suitable family in Settings / Coverage preferences.')
    if(more)this.cache.clear()
-   const abort=new AbortController(),signal=AbortSignal.any([abort.signal,AbortSignal.timeout(180000)])
+   const abort=new AbortController(),signal=AbortSignal.any([abort.signal,AbortSignal.timeout(360000)])
    this.photoRequests.clear();this.active=abort;this.state.actionableError=undefined
    this.state.job={state:'running',message:'Choosing your next clothing theme...',dueAt:new Date().toISOString(),attempts:0}
    // The full multi-source/multi-query lifecycle shares one lock, deadline and cancellation promise.
@@ -86,7 +96,7 @@ export class PackService {
       const {slot,reason}=themes[index];slot.variation='Saved budget; no hidden budget variation'
       this.state.selection=selection
       if(!more)this.state.searchSession={selection:structuredClone(selection),slot,packId:null,messages:[],themeReason:(index?'Previous theme had no qualifying inventory from an accessible source. ':'')+reason}
-      this.state.job.state='running';this.state.job.message='Finding '+slot.subcategory+' within INR '+selection.min+'-'+selection.max+'...'
+      this.state.job.state='running';this.state.job.message='Finding '+slot.subcategory+' within INR '+selection.min+'-'+budgetMaximum(selection)+'...'
       await this.repository.save(this.state)
       const result=await this.collect(abort,selection,slot,replacement,signal)
       if(result.count||!result.canFallback||more)break
@@ -126,7 +136,7 @@ export class PackService {
  const errors:string[]=[];let resultCount=0,inventoryAccessible=false,usedReasoning=false,photoAccessFailed=false
  try{
  const providers=(await this.providers()).filter(p=>selection.stores.includes(p.status.id)&&sourceReady(p,this.state)).sort((a,b)=>storePriority(a.status.id,selection.storeRanks)-storePriority(b.status.id,selection.storeRanks))
- const definition=this.state.settings.categories.find(c=>c.id===slot.category);if(!definition||definition.deferred)throw new Error('Saved category is unavailable or deferred. Choose clothes again.');const category={...definition,min:selection.min,max:selection.max}
+ const definition=this.state.settings.categories.find(c=>c.id===slot.category);if(!definition||definition.deferred)throw new Error('Saved category is unavailable or deferred. Choose clothes again.');const category={...definition,min:selection.min,max:budgetMaximum(selection)}
  const queries=themeQueries(slot,this.state.settings.season,this.state.settings.occasion);const query=queries[0]
  const reports=providers.map(p=>{p.diagnostics??=discoveryDiagnostics(p.status.id+': '+query);p.diagnostics.query=p.status.id+': '+queries.join(' | ');return p.diagnostics});this.state.diagnostics=[...(this.state.diagnostics??[]),...reports].slice(-16)
  const pools=new Map<string,PackProduct[]>()
@@ -137,8 +147,8 @@ export class PackService {
    if(signal.aborted||!sourceReady(provider,this.state))break
    const d=provider.diagnostics;const beforeRejects=d?.rejections.length??0
    try{
-    const key=[provider.status.id,query,selection.min,selection.max].join(':');const cached=this.cache.get(key);const fromCache=!!cached&&Date.now()-cached.at<6*3600000
-    const requestSignal=AbortSignal.any([signal,AbortSignal.timeout(65000)])
+    const key=[provider.status.id,query,selection.min,budgetMaximum(selection)].join(':');const cached=this.cache.get(key);const fromCache=!!cached&&Date.now()-cached.at<6*3600000
+    const requestSignal=AbortSignal.any([signal,AbortSignal.timeout(150000)])
     const rows=fromCache?structuredClone(cached!.products):await this.hostGate.run(provider.status.host??provider.status.id,requestSignal,()=>provider.search!(category,query,requestSignal))
     const selected=rows.filter(p=>selection.stores.includes(p.retailer)&&p.retailer===provider.status.id)
     found.push(...selected);pools.set(provider.status.id,[...new Map(found.map(p=>[p.id,p])).values()].slice(0,24))
@@ -149,7 +159,7 @@ export class PackService {
     if(noReliableRows||selected.length>0&&!requiredFacts){const missing=[...new Set(selected.flatMap(p=>[!p.title.trim()?'title':'',p.price===null||p.price<=0||p.currency!=='INR'?'observed INR price':'',!matchingPhoto(p)?'exact listing/variant-to-photo proof':''].filter(Boolean)))];const reason=`Read ${selected.length} listing records; ${selected.filter(p=>p.price!==null&&p.price>0&&p.currency==='INR').length} with INR price. Still missing: ${missing.join(', ')||'readable listing facts'}. Existing candidates are kept; category and budget were not changed.`;errors.push(provider.status.id+': '+reason);recordSource(this.state,provider.status.id,reason);break}
     inventoryAccessible=true
     if(!fromCache){recordSource(this.state,provider.status.id);this.cache.set(key,{at:Date.now(),products:structuredClone(selected)})}if(this.cache.size>60)this.cache.delete(this.cache.keys().next().value!)
-    const matching=found.filter(p=>{if(!p.category||!p.subcategory)classify(p,this.state.settings.categories);return p.category===slot.category&&p.subcategory===slot.subcategory&&p.currency==='INR'&&p.price!==null&&p.price>=selection.min&&p.price<=selection.max&&matchingPhoto(p)&&p.stock!=='out-of-stock'})
+    const matching=found.filter(p=>{if(!p.category||!p.subcategory)classify(p,this.state.settings.categories);return p.category===slot.category&&p.subcategory===slot.subcategory&&p.currency==='INR'&&p.price!==null&&p.price>=selection.min&&p.price<=budgetMaximum(selection)&&matchingPhoto(p)&&p.stock!=='out-of-stock'})
     if(selectProducts(matching,selection.size+2).length>=selection.size+2)break
    }catch(e){const partial=provider.collected?.filter(p=>selection.stores.includes(p.retailer)&&p.retailer===provider.status.id)??[];found.push(...partial);pools.set(provider.status.id,[...new Map(found.map(p=>[p.id,p])).values()].slice(0,24));const reason=message(e);errors.push(provider.status.id+': '+reason);reject(d,'search',reason);if(!signal.aborted)recordSource(this.state,provider.status.id,reason);break}
   }
@@ -160,7 +170,7 @@ export class PackService {
  const currentIds=session.packId?this.pack(session.packId).productIds:[]
  const currentProducts=this.state.products.filter(p=>currentIds.includes(p.id)&&selection.stores.includes(p.retailer))
  // Known mismatches never crowd out lower-priority matching inventory in the bounded pool.
- const possible=(p:PackProduct)=>(!p.category||p.category===slot.category)&&(!p.subcategory||p.subcategory===slot.subcategory)&&(p.price===null||p.currency!=='INR'||p.price>=selection.min&&p.price<=selection.max)&&p.stock!=='out-of-stock'
+ const possible=(p:PackProduct)=>(!p.category||p.category===slot.category)&&(!p.subcategory||p.subcategory===slot.subcategory)&&(p.price===null||p.currency!=='INR'||p.price>=selection.min&&p.price<=budgetMaximum(selection))&&p.stock!=='out-of-stock'
  const candidates=[...new Map([...pool,...retained].filter(possible).map(p=>[p.id,p])).values()].sort((a,b)=>storePriority(a.retailer,selection.storeRanks)-storePriority(b.retailer,selection.storeRanks))
  const unique=[...new Map([...currentProducts,...candidates].map(p=>[p.id,p])).values()].slice(0,30).map(p=>this.state.products.find(saved=>saved.id===p.id)??p)
  const verified:PackProduct[]=[]
@@ -169,19 +179,19 @@ export class PackService {
   try{
    const stale=!p.observedAt||!Number.isFinite(Date.parse(p.observedAt))||Date.parse(p.observedAt)>Date.now()||Date.now()-Date.parse(p.observedAt)>6*3600000
    const failed=p.failures.some(f=>f.startsWith('Revalidation failed:'))
-   if((stale||failed||p.match!=='exact'||!matchingPhoto(p)||!p.title||p.price===null||p.currency!=='INR')&&provider?.details&&sourceReady(provider,this.state))p=await this.hostGate.run(provider.status.host??provider.status.id,signal,()=>{if(!sourceReady(provider,this.state))throw new Error('Source refresh paused after its access failure.');return provider.details!(p,AbortSignal.any([signal,AbortSignal.timeout(25000)]))})
+   if((stale||failed||p.match!=='exact'||!matchingPhoto(p)||!p.title||p.price===null||p.currency!=='INR')&&provider?.details&&sourceReady(provider,this.state))p=await this.hostGate.run(provider.status.host??provider.status.id,signal,()=>{if(!sourceReady(provider,this.state))throw new Error('Source refresh paused after its access failure.');return provider.details!(p,AbortSignal.any([signal,AbortSignal.timeout(45000)]))})
    else if(stale)throw new Error('No authorized detail refresh available; listing facts are missing or stale.')
    if(p.title!==original.title){p.category='';p.subcategory='';p.aiClassification=undefined}
    if(!p.category||!p.subcategory)classify(p,this.state.settings.categories)
    if(!p.category&&p.title===original.title&&original.aiClassification){p.category=original.aiClassification.category;p.subcategory=original.aiClassification.subcategory;p.aiClassification=original.aiClassification}
-   if(p.title&&p.price!==null&&p.price>0&&p.currency==='INR'&&p.price>=selection.min&&p.price<=selection.max&&p.stock!=='out-of-stock')await this.verifyPhoto(p,signal)
+   if(p.title&&p.price!==null&&p.price>0&&p.currency==='INR'&&p.price>=selection.min&&p.price<=budgetMaximum(selection)&&p.stock!=='out-of-stock')await this.verifyPhoto(p,signal)
    if(p.photoFailure&&!photoReady(p))photoAccessFailed=true
    applyLicences(p,this.state.licences??[])
    if(p.category&&p.category!==slot.category||p.subcategory&&p.subcategory!==slot.subcategory)reject(d,'category','Observed clothing category differs from chosen theme.')
    else if(p.category===slot.category&&p.subcategory===slot.subcategory){if(d)d.counts.categoryMatches++}
    else reject(d,'category','Category unknown; requires classification from observed listing evidence.')
    if(p.price===null||p.currency!=='INR')reject(d,'budget','Observed INR price unavailable.')
-   else if(p.price<selection.min||p.price>selection.max)reject(d,'budget','Observed price outside selected hard budget.')
+   else if(p.price<selection.min||p.price>budgetMaximum(selection))reject(d,'budget','Observed price outside selected hard budget.')
    else if(d)d.counts.budgetMatches++
    if(p.match==='exact'){if(d)d.counts.variantMatches++}else reject(d,'variant','Listing/photo variant relationship unverified.')
    if(matchingPhoto(p)&&photoReady(p)){if(d)d.counts.usablePhotos++}else reject(d,'photos',p.photoFailure?.reason??'Photo read or exact listing/variant relationship remains unverified.')
@@ -199,8 +209,8 @@ export class PackService {
  const candidateIds=new Set(unique.map(p=>p.id))
  view.products=view.products.filter(p=>selection.stores.includes(p.retailer)&&candidateIds.has(p.id))
  let advice:PackAdvice|null=null
- const facts=view.products.filter(p=>p.title&&p.price!==null&&p.currency==='INR'&&p.price>=selection.min&&p.price<=selection.max&&p.observedAt&&Date.parse(p.observedAt)<=Date.now()&&Date.now()-Date.parse(p.observedAt)<=6*3600000&&p.match==='exact'&&matchingPhoto(p)&&photoReady(p)&&p.stock!=='out-of-stock'&&!p.failures.some(f=>f.startsWith('Revalidation failed:')))
- const additions=facts.filter(p=>eligible({...p,category:p.category||slot.category,subcategory:p.subcategory||slot.subcategory},{category:slot.category,subcategory:slot.subcategory,min:selection.min,max:selection.max,stores:selection.stores},view))
+ const facts=view.products.filter(p=>p.title&&p.price!==null&&p.currency==='INR'&&p.price>=selection.min&&p.price<=budgetMaximum(selection)&&p.observedAt&&Date.parse(p.observedAt)<=Date.now()&&Date.now()-Date.parse(p.observedAt)<=6*3600000&&p.match==='exact'&&matchingPhoto(p)&&photoReady(p)&&p.stock!=='out-of-stock'&&!p.failures.some(f=>f.startsWith('Revalidation failed:')))
+ const additions=facts.filter(p=>eligible({...p,category:p.category||slot.category,subcategory:p.subcategory||slot.subcategory},{category:slot.category,subcategory:slot.subcategory,min:selection.min,max:budgetMaximum(selection),stores:selection.stores},view))
  if(!existing&&additions.length&&view.settings.ai?.provider!=='none'){
   this.state.job.message='Choosing from verified listing evidence...'
   if(!this.reasoning)throw new Error('Account reasoning unavailable. Collected products are saved. Choose Code only in Settings / Advanced to continue without AI.')
@@ -236,7 +246,7 @@ export class PackService {
  else if(pack)pack.reasons=[session.themeReason??'Editorial exploration; no measured trend claim.',...errors]
  if(pack&&Object.keys(pack.storeRanks??{}).length)pack.reasons.push('Manual store priority: '+[...new Set(pack.productIds.map(id=>this.state.products.find(p=>p.id===id)!.retailer))].map(id=>id+' ('+pack!.productIds.filter(productId=>this.state.products.find(p=>p.id===productId)!.retailer===id).length+')').join(', ')+'. Original links only; create EarnKaro links yourself. No commission rates were fetched or inferred.')
  const planned=this.state.plan.find(s=>s.id===slot.id);if(planned){planned.state=count>=selection.size?'drafted':'pending';if(count>=selection.size){planned.category=slot.category;planned.subcategory=slot.subcategory;planned.reason=slot.reason}}
- for(const provider of providers)if(provider.diagnostics)provider.diagnostics.counts.packCandidates=this.state.products.filter(p=>p.retailer===provider.status.id&&reviewable(p,{category:slot.category,subcategory:slot.subcategory,min:selection.min,max:selection.max,stores:selection.stores})).length
+ for(const provider of providers)if(provider.diagnostics)provider.diagnostics.counts.packCandidates=this.state.products.filter(p=>p.retailer===provider.status.id&&reviewable(p,{category:slot.category,subcategory:slot.subcategory,min:selection.min,max:budgetMaximum(selection),stores:selection.stores})).length
  for(const provider of providers){const reasons=[...new Set(provider.diagnostics?.rejections.map(r=>r.reason)??[])].slice(0,2);if(reasons.length)errors.push(provider.status.id+': '+reasons.join(' '))}
  session.messages=errors
  if(!count&&photoAccessFailed)this.state.actionableError={code:'source-blocked',message:'Listing photos could not be verified. Candidates and exact access errors are saved; category and budget were not changed to hide this source limitation.',action:'Review photo/source errors in Settings before an explicit recheck'}

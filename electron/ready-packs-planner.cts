@@ -1,4 +1,4 @@
-import { eligible, selectProducts, planSeventhSlot } from './ready-packs-core.cjs'
+import { budgetMaximum, eligible, selectProducts, planSeventhSlot } from './ready-packs-core.cjs'
 import type { Category, FindSelection, PackStore, PlanSlot } from './ready-packs-types.cjs'
 
 export function autoCategory(c:Category,season:string):boolean {
@@ -30,7 +30,7 @@ export function nextThemes(store:PackStore,selection:FindSelection):{slot:PlanSl
  const scored=slots.map((original,index)=>{
   const slot=structuredClone(original)
   if(selection.category==='auto'&&slot.day===7){planSeventhSlot(store,slot);if(!store.settings.categories.some(c=>c.id===slot.category&&autoCategory(c,store.settings.season)))Object.assign(slot,original)}
-  const inventory=selectProducts(store.products.filter(p=>eligible(p,{category:slot.category,subcategory:slot.subcategory,min:selection.min,max:selection.max,stores:selection.stores},store)),selection.size).length
+  const inventory=selectProducts(store.products.filter(p=>eligible(p,{category:slot.category,subcategory:slot.subcategory,min:selection.min,max:budgetMaximum(selection),stores:selection.stores},store)),selection.size).length
   const coverage=history.filter(p=>p.category===slot.category&&p.subcategory===slot.subcategory).length
   const repetition=recent.filter(p=>p.category===slot.category).length
   const score=(inventory>=selection.size?200:inventory*20)-coverage*4-repetition*12-index/1000

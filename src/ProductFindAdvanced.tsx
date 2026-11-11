@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { MerchantCatalogue, PackAction, PackSettings, PackStore } from '../electron/ready-packs-types.cjs'
 import './product-find.css'
+import { Icon } from './icons'
 
 export function ProductFindAdvanced() {
   const api = window.frameStudio?.readyPacks
@@ -19,7 +20,7 @@ export function ProductFindAdvanced() {
     return () => { alive = false }
   }, [api])
   useEffect(() => {
-    if (!api || !pairing) return
+    if (!api) return
     let alive = true, pending = false
     const timer = setInterval(() => {
       if (pending) return
@@ -27,7 +28,7 @@ export function ProductFindAdvanced() {
       void api.status().then(next => { if (alive) { setState(next); if (next.browserStatus?.state === 'paired') setPairing(null) } }).catch(() => {}).finally(() => { pending = false })
     }, 2000)
     return () => { alive = false; clearInterval(timer) }
-  }, [api, pairing])
+  }, [api])
   async function act(action: PackAction) {
     if (!api) return
     setBusy(true); setError(''); setNotice('')
@@ -36,18 +37,24 @@ export function ProductFindAdvanced() {
     finally { setBusy(false) }
   }
   const locked = busy || state?.job.state === 'running'
+  async function copyPairingCode() {
+    if (!pairing) return
+    try { await api?.action({type:'browser-copy-code'}); setNotice('Product Find pairing code copied.'); setError('') }
+    catch (e) { setError(e instanceof Error ? e.message : 'Could not copy the code.') }
+  }
   return <div className="product-find">
     <p>Product Find runs when you click Find. Old YouTube and pack schedules are paused. Saved credentials, products and history remain intact.</p>
     {error && <p role="alert" className="prompt-validation-error">{error}</p>}{notice && <p role="status">{notice}</p>}
+    {state?.job.state === 'running' && <div role="status"><p>{state.job.message} Finish or cancel this search before changing settings.</p><button className="button button-secondary" disabled={busy} onClick={() => void act({type:'cancel'})}>{busy ? 'Stopping...' : 'Cancel active search'}</button></div>}
     <details open><summary>Chrome product collection</summary>
       <p>{state?.browserStatus?.message ?? 'Connect Chrome once. No EarnKaro or affiliate API is needed for this browser route.'}</p>
-      <ol><li>First setup only: click Open Product Finder folder. In Chrome, open chrome://extensions, enable Developer mode, then Load unpacked and select that permanent folder. Product Finder 0.1.1 has a purple clothing/search icon. If you loaded an older version's release folder, switch to this permanent folder once. Existing Flow settings stay intact.</li>
+      <ol><li>First setup only: click Open Product Finder folder. In Chrome, open chrome://extensions, enable Developer mode, then Load unpacked and select that permanent folder. Product Finder 0.1.4 has a purple clothing/search icon. If you loaded an older version's release folder, switch to this permanent folder once. Existing Flow settings stay intact.</li>
         <li>Keep a normal Chrome window open. Click Create Product Find code below.</li>
-        <li>Open Product Finder. Choose shopping sites, paste this code, then click Allow sites and connect Product Find. Approve only those sites in Chrome. Use Flow Bridge only for Google Flow.</li>
+        <li>Open Product Finder. First setup only: click Allow shopping sites once and approve Chrome access. Then paste this code and click Connect Product Find. Later connections reuse saved Chrome permissions without another permission request. Select stores and priorities only in Frame Studio. Use Flow Bridge only for Google Flow.</li>
         <li>Return to Product Find and click Find my next post. Your saved platform numbers choose product priority. Keep Chrome and the app open.</li></ol>
       <p>After future software updates, open the app, then click Refresh extension in Product Finder or Reload in chrome://extensions. Do not remove/load it again: the app updates the same permanent folder. Refresh waits for you to finish or cancel collection. Pair again after refreshing or restarting the app/Chrome; pairing is separate from loading. Actual public search/detail readers are implemented but not runtime-tested. Login/CAPTCHA/access restrictions stop collection. Amazon/AJIO automatic collection still needs genuine existing merchant permission; enabling a Chrome checkbox does not override their restrictions. Image export rights stay separate.</p>
       <div className="find-actions"><button className="button button-secondary" disabled={locked} onClick={() => void act({type:'browser-folder'})}>Open Product Finder folder</button><button className="button button-secondary" disabled={locked} onClick={() => void act({type:'browser-pair'})}>Create Product Find code</button><button className="button button-secondary" disabled={locked} onClick={() => void act({type:'browser-disconnect'})}>Disconnect Product Find only</button></div>
-      {pairing && <><label>Temporary Product Find code<input className="find-selectable-link" readOnly value={pairing.code} onFocus={e=>e.target.select()} /></label><p>Expires {new Date(pairing.expiresAt).toLocaleTimeString()}. This is a local connection code, not your shopping account password.</p></>}
+      {pairing && <><label htmlFor="product-pairing-code">Temporary Product Find code</label><div className="find-pairing-code"><input id="product-pairing-code" className="find-selectable-link" readOnly value={pairing.code} onFocus={e=>e.target.select()} /><button className="button button-secondary" title="Copy pairing code" aria-label="Copy Product Find pairing code" onClick={() => void copyPairingCode()}><Icon name="copy" size={18}/></button></div><p>Expires {new Date(pairing.expiresAt).toLocaleTimeString()}. This is a local connection code, not your shopping account password.</p></>}
     </details>
     <details><summary>Platform priority</summary>
       <p>Set your own numbers: 1 first, 2 next, up to 99. Blank stores come after numbered stores; equal numbers share a priority. These are your preferences, not measured commission rates. No EarnKaro login or automatic affiliate-link conversion is required.</p>

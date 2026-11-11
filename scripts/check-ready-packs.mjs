@@ -10,7 +10,7 @@ import { parseCsv, importProducts, flipkartProducts } from '../dist-electron/rea
 import { manifest, textEntries, exportZip } from '../dist-electron/ready-packs-export.cjs'
 const folder=await mkdtemp(path.join(os.tmpdir(),'frame-ready-packs-fixtures-'))
 const store=emptyStore();store.settings.ai={provider:'none',model:'',effort:'medium'}
-function fixture(i,category='0',sub='short kurtis') {return {...candidate(`https://www.meesho.com/fixture-garment-${i}/p/fixture${i}`),title:`FIXTURE ${['floral','striped','plain','embroidered','printed','woven','lace','denim'][i%8]} short kurti`,category,subcategory:sub,variant:'blue',color:String(i),price:499,currency:'INR',observedAt:new Date().toISOString(),match:'exact',images:[{url:`https://images.example.com/fixture${i}.png`,source:'Fixture permission',variant:'blue',permission:'permitted',permissionNote:'TEST FIXTURE only',exportedAt:null}]}}
+function fixture(i,category='0',sub='short kurtis') {return {...candidate(`https://www.meesho.com/fixture-garment-${i}/p/fixture${i}`),title:`FIXTURE ${['floral','striped','plain','embroidered','printed','woven','lace','denim'][i%8]} short kurti`,category,subcategory:sub,variant:'blue',color:String(i),price:499,currency:'INR',observedAt:new Date().toISOString(),match:'exact',photoObservation:{url:`https://images.example.com/fixture${i}.png`,at:new Date().toISOString()},images:[{url:`https://images.example.com/fixture${i}.png`,source:`https://www.meesho.com/fixture-garment-${i}/p/fixture${i}`,variant:'blue',permission:'permitted',permissionNote:'TEST FIXTURE only',exportedAt:null}]}}
 assert.equal(store.plan.length,56)
 assert.equal(new Set(store.plan.filter(p=>p.week<=4&&p.day<=5).map(p=>p.category)).size,20)
 assert.deepEqual(store.plan.filter(p=>p.day===6).map(p=>p.category),['20','21','22','23','20','21','22','23'])
@@ -24,7 +24,7 @@ const a=fixture(0),b={...fixture(1),garmentId:'same'},c={...fixture(2),garmentId
 assert.equal(selectProducts([a,b,c,d],5).length,2)
 const pack=assemble(store,store.plan[0]);assert.equal(pack.productIds.length,5)
 assert.equal(eligible(store.products[0],theme,store),false)
-const seventh=structuredClone(store.plan[6]);planSeventhSlot(store,seventh);assert.notEqual(seventh.category,'0');assert.match(seventh.reason,/least-covered/);const varied=emptyStore();varied.products=Array.from({length:6},(_,i)=>({...fixture(i),price:900}));assert.equal(assemble(varied,varied.plan[28]).productIds.length,0);
+const seventh=structuredClone(store.plan[6]);planSeventhSlot(store,seventh);assert.notEqual(seventh.category,'0');assert.match(seventh.reason,/least-covered/);const varied=emptyStore();varied.products=Array.from({length:6},(_,i)=>({...fixture(i),price:900}));assert.equal(assemble(varied,varied.plan[28]).productIds.length,5);
 const measured=emptyStore();for(let theme=0;theme<2;theme++)for(let i=0;i<2;i++){measured.packs.push({...pack,id:'measured-'+theme+'-'+i,category:String(theme),subcategory:theme?'tops':'short kurtis',state:'posted',performance:[1,2].map(day=>({postUrl:'',publishedAt:'2026-11-01',source:'Manual Insights',window:'First 7 days',observedAt:'2026-11-0'+day+'T12:00:00Z',reach:1000,saves:theme?10:50,shares:null,clicks:null,orders:null,commission:null}))})}const repeated=measured.plan[6];planSeventhSlot(measured,repeated);assert.equal(repeated.category,'0');assert.match(repeated.reason,/Repeat supported/);
 const repo=new PackRepository(folder);await writeFile(path.join(folder,'library.json'),'LEGACY DATA UNCHANGED');await writeFile(path.join(folder,'keys.bin'),'LEGACY SECRET UNCHANGED');await repo.save(store);await repo.save(store)
 assert.equal((await repo.load()).packs.length,1)
@@ -49,10 +49,10 @@ const denied=structuredClone(exportStore.products);denied[0].images[0].permissio
 const newer=structuredClone(store);newer.version=99;await writeFile(path.join(folder,'ready-packs-v1.json'),JSON.stringify(newer));await assert.rejects(repo.load(),/Unsupported/)
 // Restart recovers a running job and never duplicates already committed slots.
 const jobsFolder=await mkdtemp(path.join(os.tmpdir(),'frame-ready-job-fixtures-'));const jobsRepo=new PackRepository(jobsFolder);const jobs=emptyStore();jobs.settings.ai={provider:'none',model:'',effort:'medium'};jobs.job.state='running';await jobsRepo.save(jobs)
-let searches=0;const provider={status:{id:'fixture',status:'FIXTURE',capabilities:{search:true}},search:async(c,sub)=>{searches++;await new Promise(r=>setTimeout(r,10));return Array.from({length:6},(_,i)=>fixture(searches*10+i,c.id,sub))}}
+let searches=0;const provider={status:{id:'meesho',status:'FIXTURE',readiness:'configured-unverified',capabilities:{search:true,details:true,images:true}},details:async p=>p,search:async(c,sub)=>{searches++;await new Promise(r=>setTimeout(r,10));return Array.from({length:8},(_,i)=>fixture(searches*10+i,c.id,sub))}}
 const runner=new PackService(jobsRepo,async()=>[provider]);await runner.ready;assert.equal(runner.state.job.state,'idle');await runner.generate();await assert.rejects(runner.generate(),/running/)
 while(runner.busy)await new Promise(r=>setTimeout(r,10))
-assert.equal(runner.queue().length,3);assert.equal(searches,3);assert.equal(new Set(runner.state.packs.map(p=>p.slotId)).size,3)
-const restarted=new PackService(jobsRepo,async()=>[provider]);await restarted.ready;await restarted.tick();assert.equal(searches,3);assert.equal(restarted.state.packs.length,3)
+assert.equal(runner.queue().length,1);assert.equal(searches,1);assert.equal(new Set(runner.state.packs.map(p=>p.slotId)).size,1)
+const restarted=new PackService(jobsRepo,async()=>[provider]);await restarted.ready;await restarted.tick();assert.equal(searches,1);assert.equal(restarted.state.packs.length,1)
 console.log('PASS: planner, strict filters, unknowns, deduplication, coherence, replacement, cooldown, persistence, preservation, version refusal, restart, overlap, ZIP mapping, JPEG conversion, escaping, and permissions.')
 console.log('Fixture ZIP for independent inspection: '+path.join(folder,'fixture-pack.zip'))

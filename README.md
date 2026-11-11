@@ -2,7 +2,11 @@
 
 A Windows desktop studio for turning product photos into social media posts and reels. Organize products, reusable themes, and character references locally; generate media through your own Google Flow session; review results and export approved images or videos.
 
-**Current version:** `0.13.0-preview.54` (preview).
+**Current version:** `0.13.0-preview.56` (preview).
+
+Preview.56 updates current connection status, removes stale pairing-success/setup messages, refreshes Advanced continuously and exposes Cancel active search. Product Finder 0.1.4 and Flow Bridge 0.1.10 have compact popups with secondary guidance under Help. Focused fixture tests and a headless isolated Chrome popup check passed; all retailer/network responses and permission APIs in those tests were fixtures. No real retailer access, Google account or paid model request was used. Existing app/Chrome profiles remain untouched.
+
+Preview.55 bundles Product Finder 0.1.3. Chrome site access is a separate one-time approval; later pairing uses existing grants without prompting again. Choose stores only in Frame Studio. Both pairing controls have copy icons. Customize exposes an extra INR allowance and the lowest allowed store priority; the displayed limits are enforced throughout selection. Slow retailer pages have bounded extra time and can be read once their retailer document is committed. These are source changes for owner testing, not proof of all-store access. Runtime/browser tests, live retailer searches and model calls were not run. See [current setup and limits](PRODUCT-FIND.md).
 
 Chrome connections now have separate names and icons: **Flow Bridge** (blue bridge/play) handles Google Flow; **Product Finder** (purple clothing/search) handles Product Find. Settings opens the correct extension folder for each connection. Reload the existing Flow companion as Flow Bridge, then load Product Finder once from its separate folder and pair its Product Find code. Saved app data and Flow's page adapter remain unchanged. Retailer collection is still unverified; no runtime/browser/model tests were run for this branding revision.
 

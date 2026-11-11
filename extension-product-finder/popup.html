@@ -2,21 +2,15 @@
 <html lang="en"><head><meta charset="utf-8"><title>Product Finder</title><link rel="icon" type="image/png" href="icons/icon-32.png"><link rel="stylesheet" href="popup.css"></head>
 <body>
 <header class="brand"><img src="icons/icon-48.png" width="48" height="48" alt=""><div><h1>Product Finder</h1><p id="version" class="note"></p></div></header>
-<p>Connect original product pages to Frame Studio. No EarnKaro, affiliate conversion, purchases, account or cookie access.</p>
-<fieldset id="product-stores"><legend>Allow selected shopping sites</legend>
-<label><input type="checkbox" value="myntra" checked>Myntra</label>
-<label><input type="checkbox" value="meesho" checked>Meesho</label>
-<label><input type="checkbox" value="flipkart" checked>Flipkart</label>
-<label><input type="checkbox" value="amazon">Amazon (merchant permission needed for automatic collection)</label>
-<label><input type="checkbox" value="ajio">AJIO (merchant permission needed for automatic collection)</label>
-</fieldset>
-<label for="product-code">Product Find pairing code from app Settings</label>
+<p id="connection-status" role="status">Checking current app connection...</p>
+<p id="site-access" role="status">Checking saved Chrome site permissions...</p>
+<button id="allow-sites" disabled>Allow shopping sites once</button>
+<p class="note">Choose stores in Frame Studio. Site permission is saved by Chrome.</p>
+<label for="product-code">Pairing code from Frame Studio</label>
 <input id="product-code" type="password" autocomplete="off" spellcheck="false" placeholder="port.pairing-code">
-<button id="product-connect">Allow sites and connect Product Find</button>
-<button id="product-disconnect">Disconnect Product Find</button>
+<button id="product-connect" disabled>Connect</button>
+<button id="product-disconnect">Disconnect</button>
 <button id="refresh">Refresh extension</button>
-<p class="note">Load this extension once from the app's permanent folder. After a software update, finish or cancel collection, then click Refresh extension. No need to remove or load it again. Refresh disconnects Product Find; pair a fresh code afterward.</p>
-<p class="note">Collection runs only when you click Find in the app. Chrome permission does not grant commercial photo rights or override a retailer restriction. CAPTCHA/login barriers stop collection. Site readers need your manual testing.</p>
-<p class="note">Google Flow uses the separate blue Flow Bridge extension. Its pairing code does not belong here.</p>
+<details><summary>Help</summary><p class="note">First setup allows Myntra, Meesho, Flipkart, Amazon India and AJIO. Later connections reuse saved site permissions. After an app update, finish/cancel collection, refresh this extension and pair a new code. Load the permanent folder only once.</p><p class="note">Find runs in Frame Studio. Site permission does not grant merchant access or commercial photo rights. Login/CAPTCHA barriers stop collection. Google Flow uses Flow Bridge.</p></details>
 <p id="product-status" role="status"></p><script src="popup.js"></script>
 </body></html>

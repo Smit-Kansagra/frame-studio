@@ -3,7 +3,7 @@ import type { FindSelection, PackAction, PackProduct, PackStore } from '../elect
 import './product-find.css'
 
 const storeNames: Record<string, string> = { meesho: 'Meesho', flipkart: 'Flipkart', amazon: 'Amazon', myntra: 'Myntra', ajio: 'AJIO', libas: 'Libas' }
-const defaults: FindSelection = { category: 'auto', min: 200, max: 1000, size: 5, stores: [], mode: 'auto', storeMode: 'auto' }
+const defaults: FindSelection = { category: 'auto', min: 200, max: 1000, extraBudgetInr: 100, size: 5, stores: [], mode: 'auto', storeMode: 'auto' }
 export function ProductFind() {
   const api = window.frameStudio?.readyPacks
   const [state, setState] = useState<PackStore | null>(null)
@@ -20,7 +20,7 @@ export function ProductFind() {
       pending = true
       try {
         const next = await api.status()
-        if (alive) { setState(next); setSelection(old => old ?? next.preferences ?? defaults) }
+        if (alive) { setState(next); setSelection(old => old ?? { ...defaults, ...next.preferences, extraBudgetInr: next.preferences?.extraBudgetInr ?? 100, maxStorePriority: next.preferences?.maxStorePriority ?? (Object.keys(next.settings.storeRanks ?? {}).length ? 4 : 100) }) }
       } catch (e) { if (alive) setError(e instanceof Error ? e.message : String(e)) }
       finally { pending = false }
     }
@@ -72,13 +72,16 @@ export function ProductFind() {
             <label>Minimum INR<input type="number" min="0" max="10000000" step="1" required value={selection && Number.isFinite(selection.min) ? selection.min : ''} onChange={e => setSelection(s => s ? { ...s, min: e.target.valueAsNumber } : s)} /></label>
             <label>Maximum INR<input type="number" min={selection && Number.isFinite(selection.min) ? selection.min : 0} max="10000000" step="1" required value={selection && Number.isFinite(selection.max) ? selection.max : ''} onChange={e => setSelection(s => s ? { ...s, max: e.target.valueAsNumber } : s)} /></label>
             <label>Products<select value={selection?.size ?? 5} onChange={e => setSelection(s => s ? { ...s, size: Number(e.target.value) } : s)}>{[4, 5, 6].map(n => <option key={n} value={n}>{n}</option>)}</select></label>
+            <label>Extra price allowance (INR)<input type="number" min="0" max="1000" step="1" required value={selection?.extraBudgetInr ?? 100} onChange={e => setSelection(s => s ? { ...s, extraBudgetInr: e.target.valueAsNumber } : s)} /></label>
+            <label>Lowest allowed store priority<input type="number" min="1" max="100" step="1" required value={selection?.maxStorePriority ?? 100} onChange={e => setSelection(s => s ? { ...s, maxStorePriority: e.target.valueAsNumber } : s)} /><small>4 uses priorities 1–4 only. 100 allows all stores, including unranked stores. Missing access gives a partial/empty result instead of exceeding this cutoff.</small></label>
             <label className="find-auto-toggle"><input type="checkbox" checked={selection?.storeMode !== 'manual'} onChange={e => setSelection(s => s ? { ...s, storeMode: e.target.checked ? 'auto' : 'manual', stores: e.target.checked ? [] : shownStores.filter(p => ['configured-unverified', 'accessible'].includes(p.readiness ?? '')).map(p => p.id), mode: e.target.checked && s.category === 'auto' ? 'auto' : 'custom' } : s)} />Auto stores</label>
             {selection?.storeMode === 'manual' && <div className="find-marketplaces">{shownStores.map(p => <label key={p.id} title={p.status}><input type="checkbox" checked={selection.stores.includes(p.id)} disabled={p.readiness === 'needs-access' || p.readiness === 'unsupported'} onChange={e => setSelection(s => s ? { ...s, stores: e.target.checked ? [...s.stores, p.id] : s.stores.filter(id => id !== p.id) } : s)} />{p.name ?? storeNames[p.id] ?? p.id}</label>)}</div>}
           </fieldset>
-          <p>Saved range is a hard limit. Manual clothing overrides never change automatically.</p>
+          <p>Store priority is applied before price variety: qualifying products from preferred stores come first, including the extra allowance. The final limit is INR {(selection?.max ?? 1000) + (selection?.extraBudgetInr ?? 100)}. Set extra allowance to 0 for a strict budget. Manual clothing overrides never change automatically.</p>
           <button className="button button-secondary" type="submit" disabled={locked || !selection}>Save preferences</button>
         </form>
       </details>
+      <p>Extra price allowance: INR {selection?.extraBudgetInr ?? 100}. Final maximum: INR {(selection?.max ?? 1000) + (selection?.extraBudgetInr ?? 100)}. Lowest allowed store priority: {selection?.maxStorePriority ?? 100}. Stores beyond this cutoff are excluded even if the result is incomplete.</p>
       <p role="status" aria-live="polite">{state?.job.message ?? (api ? 'Loading your saved defaults…' : 'Open Frame Studio desktop to find products.')}</p>
       {running && <progress aria-label="Finding and verifying products" />}
       {error && <p role="alert" className="prompt-validation-error">{error}</p>}{notice && <p role="status">{notice}</p>}

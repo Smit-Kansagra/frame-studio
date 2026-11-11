@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Product Finder",
-  "version": "0.1.1",
+  "version": "0.1.4",
   "minimum_chrome_version": "116",
   "description": "Original clothing listings for Frame Studio. Explicit local pairing and optional shopping-site access. No cookie access.",
   "permissions": ["scripting"],

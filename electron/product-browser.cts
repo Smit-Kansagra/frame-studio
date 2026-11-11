@@ -28,6 +28,7 @@ export class ProductBrowser {
  private pending=new Map<string,Pending>()
  private state:BrowserStatus={state:'not-connected',stores:[],message:'Pair Chrome in Product Find Settings for this app session. Collection runs only after you click Find.',checkedAt:null}
  status():BrowserStatus{return structuredClone(this.state)}
+ pairingCode():string{const address=this.server?.address();if(!this.token||Date.now()>this.expires||!address||typeof address==='string')throw error('Create a fresh Product Find code before copying.');return address.port+'.'+this.token.toString('hex')}
  async pair(){
   await this.close()
   this.token=randomBytes(32);this.expires=Date.now()+5*60000
@@ -84,7 +85,7 @@ export class ProductBrowser {
   return new Promise<Snapshot>((resolve,reject)=>{
    const fail=()=>{ws.terminate();this.state={state:'not-connected',stores:[],message:'Chrome worker did not settle in time. Reconnect after the extension finishes stopping.',checkedAt:new Date().toISOString()};this.failPending()}
    const stop=()=>{const p=this.pending.get(id);if(!p||p.aborted)return;p.aborted=true;clearTimeout(p.timer);p.timer=setTimeout(fail,10000);if(ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:'cancel',id}))}
-   const p:Pending={resolve,reject,timer:setTimeout(fail,50000),cleanup:()=>signal.removeEventListener('abort',stop),aborted:false}
+   const p:Pending={resolve,reject,timer:setTimeout(fail,75000),cleanup:()=>signal.removeEventListener('abort',stop),aborted:false}
    this.pending.set(id,p);signal.addEventListener('abort',stop,{once:true})
    ws.send(JSON.stringify({type:'collect',id,store,mode,...mode==='search'?{query:input}:{url:input}}),e=>{if(e)fail()})
    if(signal.aborted)stop()
@@ -119,10 +120,10 @@ function listingSnapshot(original:PackProduct,snapshot:Snapshot):PackProduct {
  if(exact&&typeof exact.color!=='string'){product.color='';product.variant='unknown';product.match='unknown';product.images=product.images.map(image=>({...image,variant:'unknown'}))}
  product.listingAttributes=undefined
  if(snapshot.attributes&&typeof snapshot.attributes==='object'&&!Array.isArray(snapshot.attributes))product.listingAttributes=Object.fromEntries(Object.entries(snapshot.attributes).slice(0,30).filter(([key,value])=>/^(?:Length Type|Length|Type|Ideal For|Gender|Color|Colour|Pattern|Style Code|Sleeve Length|Shape)$/i.test(key)&&typeof value==='string'&&value.length<200))
- if(exact&&original.retailer==='flipkart'&&new URL(original.url).searchParams.get('pid')===original.retailerId&&product.title&&product.currency==='INR'&&product.price!==null&&product.images.length){
+ if(exact&&(original.retailer!=='flipkart'||new URL(original.url).searchParams.get('pid')===original.retailerId)&&!exact.hasVariant&&!exact.isVariantOf&&product.title&&product.currency==='INR'&&product.price!==null&&product.images.length){
   if(!product.color){product.variant='Listing '+original.retailerId+' (colour name unknown)';product.images=product.images.map(image=>({...image,variant:product.variant}))}
   product.match='exact'
-  product.evidence.push({url:original.url,at:product.observedAt!,kind:'listing',note:'Product JSON-LD explicitly bound to the requested Flipkart PID by its supplied product URL or exact SKU/productID. Photos belong to that bound Product node. No colour name, stock or export permission inferred.'})
+  product.evidence.push({url:original.url,at:product.observedAt!,kind:'listing',note:'One Product JSON-LD node explicitly bound to the requested listing by its supplied product URL or exact SKU/productID, without grouped variants. Photos belong to that bound Product node. No colour name, stock or export permission inferred.'})
  }
  if(product.listingAttributes&&product.observedAt)product.evidence.push({url:original.url,at:product.observedAt,kind:'listing',note:'Observed listing specifications: '+JSON.stringify(product.listingAttributes).slice(0,900)})
  const m=snapshot.myntra

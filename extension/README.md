@@ -1,5 +1,7 @@
 # Flow Bridge
 
+Preview.56 bundles Flow Bridge 0.1.10. The connection controls remain visible; optional help and upload diagnostics are collapsed. The Flow page adapter and generation behavior are unchanged. Product Find uses the separate Product Finder 0.1.4 popup. Current setup instructions below continue to apply.
+
 ## Current setup: preview.53
 
 Flow Bridge 0.1.9 is the blue bridge/play extension for Google Flow. It keeps the existing Flow worker, page adapter (`0.1.6-fast.24`), local pairing protocol, project lanes and download handling. The popup title, favicon, toolbar and extension-manager icons now use the new identity. This is an independent Frame Studio extension, not an official Google product.

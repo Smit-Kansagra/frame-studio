@@ -1,6 +1,6 @@
 {
   "name": "frame-studio",
-  "version": "0.13.0-preview.54",
+  "version": "0.13.0-preview.56",
   "private": true,
   "description": "A personal Windows studio for product photos, posts, and reels.",
   "type": "module",
@@ -31,7 +31,8 @@
     "check:extension-browser": "node scripts/check-flow-extension-browser.mjs",
     "check:reel-export": "tsc -p tsconfig.storage.json && node scripts/check-reel-export.mjs",
     "check:ready-packs": "tsc -p tsconfig.electron.json && node scripts/check-ready-packs.mjs && node scripts/check-ready-packs-discovery.mjs && node scripts/check-ready-packs-ai.mjs",
-    "check:products-base": "node scripts/check-products-base-reopen.mjs"
+    "check:products-base": "node scripts/check-products-base-reopen.mjs",
+    "check:product-connection": "tsc -p tsconfig.electron.json && node scripts/check-product-connection.mjs"
   },
   "dependencies": {
     "onnxruntime-node": "1.31.1",
@@ -84,7 +85,15 @@
       {
         "from": "extension-product-finder",
         "to": "product-finder",
-        "filter": ["*.json", "*.js", "*.html", "*.css", "icons/*.png", "icon.svg", "README.md"]
+        "filter": [
+          "*.json",
+          "*.js",
+          "*.html",
+          "*.css",
+          "icons/*.png",
+          "icon.svg",
+          "README.md"
+        ]
       },
       {
         "from": "electron/flow-native-submit.ps1",

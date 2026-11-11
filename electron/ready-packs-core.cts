@@ -15,10 +15,13 @@ export function validateStoreRanks(raw:unknown):StoreRanks {
  return ranks
 }
 export const storePriority=(id:string,ranks:StoreRanks|undefined)=>ranks?.[id]??100
+export const budgetMaximum=(selection:Pick<FindSelection,'max'|'extraBudgetInr'>)=>selection.max+(selection.extraBudgetInr??0)
 export function validateSelection(raw:unknown,settings:PackSettings):FindSelection {
  const s=raw as FindSelection
  if(!s||typeof s.category!=='string'||s.category!=='auto'&&!settings.categories.some(c=>c.id===s.category)||![4,5,6].includes(s.size)||!Number.isFinite(s.min)||!Number.isFinite(s.max)||s.min<0||s.max<s.min||s.max>10_000_000||!Array.isArray(s.stores)||s.storeMode!=='auto'&&!s.stores.length||s.stores.length>20||s.stores.some(id=>!findStores.includes(id)&&!/^catalogue:[a-z0-9-]{1,40}$/.test(id))||s.mode!==undefined&&!['auto','custom'].includes(s.mode)||s.storeMode!==undefined&&!['auto','manual'].includes(s.storeMode))throw new Error('Use a valid INR budget, 4–6 products and Auto stores or supported store overrides.')
- return {category:s.category,min:s.min,max:s.max,size:s.size,stores:[...new Set(s.stores)],mode:s.mode??'custom',storeMode:s.storeMode??'manual',storeRanks:validateStoreRanks(s.storeRanks)}
+ if(s.extraBudgetInr!==undefined&&(!Number.isInteger(s.extraBudgetInr)||s.extraBudgetInr<0||s.extraBudgetInr>1000||budgetMaximum(s)>10_000_000))throw new Error('Extra budget must be a whole INR amount from 0 to 1,000 within the maximum supported price.')
+ if(s.maxStorePriority!==undefined&&(!Number.isInteger(s.maxStorePriority)||s.maxStorePriority<1||s.maxStorePriority>100))throw new Error('Lowest allowed store priority must be from 1 to 100.');
+ return {maxStorePriority:s.maxStorePriority??100,category:s.category,min:s.min,max:s.max,extraBudgetInr:s.extraBudgetInr??0,size:s.size,stores:[...new Set(s.stores)],mode:s.mode??'custom',storeMode:s.storeMode??'manual',storeRanks:validateStoreRanks(s.storeRanks)}
 }
 export const families = [
  ['short kurtis','tops/T-shirts','casual co-ords','jeans','casual dresses'],
@@ -95,7 +98,7 @@ export function selectProducts(pool:PackProduct[],count:number,options:{storeRan
  return result
 }
 export function assemble(store:PackStore,slot:PlanSlot,preferredIds?:string[]):ReadyPack {
- const c=store.settings.categories.find(c=>c.id===slot.category)!;const pack:ReadyPack={id:randomUUID(),slotId:slot.id,theme:slot.subcategory,category:c.id,subcategory:slot.subcategory,min:store.selection?.min??c.min,max:store.selection?.max??c.max,requested:store.selection?.size??store.settings.size,stores:store.selection?.stores,storeRanks:structuredClone(store.selection?.storeRanks??store.settings.storeRanks??{}),productIds:[],state:'drafted',createdAt:new Date().toISOString(),reasons:[],performance:[],references:[]}
+ const c=store.settings.categories.find(c=>c.id===slot.category)!;const pack:ReadyPack={id:randomUUID(),slotId:slot.id,theme:slot.subcategory,category:c.id,subcategory:slot.subcategory,min:store.selection?.min??c.min,max:store.selection?budgetMaximum(store.selection):c.max,requested:store.selection?.size??store.settings.size,stores:store.selection?.stores,storeRanks:structuredClone(store.selection?.storeRanks??store.settings.storeRanks??{}),productIds:[],state:'drafted',createdAt:new Date().toISOString(),reasons:[],performance:[],references:[]}
  const qualified=store.products.filter(p=>eligible(p,pack,store));const preferred=preferredIds?.map(id=>qualified.find(p=>p.id===id));if(preferred&&(preferred.some(p=>!p)||preferred.length>pack.requested||selectProducts(preferred as PackProduct[],preferred.length).length!==preferred.length))throw new Error('AI selection failed pack invariants.');const chosen=Object.keys(pack.storeRanks??{}).length?selectProducts(qualified,pack.requested,{storeRanks:pack.storeRanks,preferredIds}):preferred?preferred as PackProduct[]:selectProducts(qualified,pack.requested);pack.productIds=chosen.map(p=>p.id)
  pack.theme=`${slot.subcategory} | INR ${pack.min}-${pack.max} | ${store.settings.occasion}`;pack.reasons.push(slot.variation)
  if(chosen.length<pack.requested)pack.reasons.push(`Incomplete: ${chosen.length}/${pack.requested}. Only exact-category listings with observed INR prices inside budget qualify; duplicates, cooldown and active packs excluded.`)

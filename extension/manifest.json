@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Flow Bridge",
-  "version": "0.1.9",
-  "version_name": "0.1.9",
+  "version": "0.1.10",
+  "version_name": "0.1.10",
   "minimum_chrome_version": "116",
   "description": "Connect Frame Studio to your Google Flow workspace. Explicit local pairing. No password or cookie access.",
   "permissions": ["activeTab", "scripting", "downloads", "storage"],

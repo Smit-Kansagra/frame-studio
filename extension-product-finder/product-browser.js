@@ -4,7 +4,7 @@ const origins = {
   myntra: 'https://www.myntra.com', meesho: 'https://www.meesho.com',
   flipkart: 'https://www.flipkart.com', amazon: 'https://www.amazon.in', ajio: 'https://www.ajio.com'
 }
-let socket, anchorWindow, permitted = []
+let socket, anchorWindow, permitted = [], paired = false
 const jobs = new Map(), ownedTabs = new Map()
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 function scope(url, store) {
@@ -43,23 +43,25 @@ async function collect(command, signal) {
   ownedTabs.set(tab.id, store)
   let succeeded = false
   try {
-    const deadline = Date.now() + 28000
+    const deadline = Date.now() + 48000
     let loaded = false
     while (Date.now() < deadline) {
       signal.throwIfAborted()
       const current = await chrome.tabs.get(tab.id)
-      if (current.status === 'complete' && !current.pendingUrl && scope(current.url, store)) { loaded = true; break }
+      // Read a committed retailer document without waiting for ads/analytics to
+      // finish every network request. The reader below still waits for facts.
+      if (!current.pendingUrl && scope(current.url, store)) { loaded = true; break }
       if (current.status === 'complete' && !current.pendingUrl && current.url && current.url !== 'about:blank' && !scope(current.url, store)) throw new Error('Chrome loaded a page outside the approved retailer listing site. No page facts were read.')
       await pause(250)
     }
-    if (!loaded) throw new Error('Chrome navigation did not finish within 28 seconds. No script was injected into the unfinished page.')
+    if (!loaded) throw new Error('Chrome navigation did not finish within 48 seconds. No retailer document was available to read.')
     let snapshot
-    for (let attempt = 0; attempt < 8; attempt++) {
+    for (let attempt = 0; attempt < 24; attempt++) {
       snapshot = await read(tab.id, store, signal, mode)
       const pdp = snapshot.myntra
       const ready = pdp ? pdp.name && pdp.price && pdp.code && pdp.images.length : /"@type"\s*:\s*(?:"Product"|\[[^\]]*"Product")/.test(JSON.stringify(snapshot.schemas))
       if (mode === 'search' ? snapshot.links.length : ready) break
-      await pause(400)
+      await pause(500)
     }
     signal.throwIfAborted()
     succeeded = true
@@ -75,11 +77,16 @@ async function collect(command, signal) {
 }
 function detach() {
   for (const job of jobs.values()) job.abort()
-  socket?.close(); socket = undefined; permitted = []
+  socket?.close(); socket = undefined; permitted = []; paired = false
 }
 chrome.permissions.onRemoved.addListener(removed => { if (removed.origins?.some(origin => Object.values(origins).some(value => origin === value + '/*'))) detach() })
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   if (sender.id !== chrome.runtime.id || typeof message.type !== 'string' || !message.type.startsWith('products:')) return false
+  if (message.type === 'products:status') {
+    if (sender.url !== chrome.runtime.getURL('popup.html')) return false
+    reply({ connected: paired && socket?.readyState === WebSocket.OPEN, running: jobs.size > 0 })
+    return false
+  }
   if (message.type === 'products:refresh') {
     if (sender.url !== chrome.runtime.getURL('popup.html')) return false
     if (jobs.size) { reply({ ok: false, message: 'Finish or cancel the active collection in Frame Studio before refreshing.' }); return false }
@@ -94,9 +101,9 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     if (jobs.size) throw new Error('Product collection is still stopping. Wait before reconnecting.')
     const match = /^(\d{1,5})\.([0-9a-f]{64})$/.exec(message.code ?? '')
     if (!match || Number(match[1]) < 1024 || Number(match[1]) > 65535) throw new Error('Create and paste a fresh Product Find pairing code.')
-    const stores = [...new Set(Array.isArray(message.stores) ? message.stores : [])].filter(store => Object.hasOwn(origins, store))
-    if (!stores.length) throw new Error('Select at least one shopping site.')
-    for (const store of stores) if (!await chrome.permissions.contains({ origins: [origins[store] + '/*'] })) throw new Error('Allow the selected sites when Chrome asks.')
+    const grants = await Promise.all(Object.entries(origins).map(async ([store, origin]) => await chrome.permissions.contains({ origins: [origin + '/*'] }) ? store : null))
+    const stores = grants.filter(store => store !== null)
+    if (!stores.length) throw new Error('Allow shopping sites once in Product Finder. Pairing uses those saved Chrome permissions; stores are selected only in Frame Studio.')
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
     if (!tab || !Number.isInteger(tab.windowId)) throw new Error('Open a normal Chrome window first.')
     detach(); permitted = stores; anchorWindow = tab.windowId
@@ -108,7 +115,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       ws.onmessage = event => {
         let command
         try { command = JSON.parse(event.data) } catch { ws.close(); return }
-        if (command.type === 'paired') { clearTimeout(timer); resolve(); return }
+        if (command.type === 'paired') { clearTimeout(timer); if(socket === ws)paired = true; resolve(); return }
         if (command.type === 'pair-error') { clearTimeout(timer); reject(new Error(command.error || 'Reload Product Finder from the current app folder.')); ws.close(); return }
         if (command.type === 'ping') { ws.send(JSON.stringify({ type: 'pong' })); return }
         if (command.type === 'cancel') { jobs.get(command.id)?.abort(); return }
@@ -122,9 +129,9 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
           if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(response))
         })()
       }
-      ws.onclose = () => { clearTimeout(timer); if (socket === ws) { socket = undefined; permitted = []; for (const job of jobs.values()) job.abort() }; reject(new Error('Product Find connection closed. Pair again in Settings.')) }
+      ws.onclose = () => { clearTimeout(timer); if (socket === ws) { socket = undefined; permitted = []; paired = false; for (const job of jobs.values()) job.abort() }; reject(new Error('Product Find connection closed. Pair again in Settings.')) }
     })
-    return { ok: true, message: 'Chrome access paired. Click Find my next post in Frame Studio. Site compatibility remains unverified until collection succeeds.' }
+    return { ok: true, message: 'Connected. Click Find my next post in Frame Studio.' }
   })().then(reply).catch(error => reply({ ok: false, message: error.message }))
   return true
 })
