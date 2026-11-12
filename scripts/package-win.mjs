@@ -9,6 +9,7 @@ const version = pkg.devDependencies.electron
 const localZip = path.resolve('.verification', `electron-v${version}-win32-x64.zip`)
 const officialHashes = new Map([['45.0.0', 'ae53887a23bb640369c93dbd38c408a2af5c0deb86f2fa76c6c244cb444b7f47']])
 const args = [path.resolve('node_modules/electron-builder/out/cli/cli.js'), '--win', 'nsis', '--x64', '--publish', 'never']
+if (process.platform === 'win32') args.unshift('--require', path.resolve('scripts/retry-packaging-write.cjs'))
 // Build-only handoffs use a versioned directory so an owner's open unpacked
 // app cannot lock an executable that this build needs to rewrite.
 if (process.argv.includes('--isolated-output')) args.push(`--config.directories.output=${path.resolve('release', pkg.version)}`)

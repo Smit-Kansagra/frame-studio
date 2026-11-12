@@ -1,4 +1,18 @@
-# Product Find — Auto workflow (0.13.0-preview.56)
+# Product Find — Auto workflow (0.13.0-preview.57)
+
+## Preview.57: History and Start project
+
+Nonempty saved collections appear automatically under History at the bottom of Product Find, newest first. Rows show clothing theme, date/time, product count, status and short product names. Expand a row for saved photo references, numbered titles, observed INR prices, variants, observation times and original links. New collection snapshots retain their saved product facts independently of later candidate refreshes. Existing collections remain available through their saved records; their earlier observations cannot be reconstructed if not previously retained. Empty failures are excluded without deleting their history. History remains on disk through the existing atomic JSON save and backup path; no SQLite migration or profile reset is introduced.
+
+Start project refreshes current listing facts and uses the same strict image-permission, public-network limits and actual JPEG conversion as ZIP export. It copies one primary photo per product in numbered order into the existing managed Studio image library, then saves one multi-photo product bundle. Original titles/variant links are retained in product description/notes (within existing field limits); full mapping remains in Product Find History. A stored signature reuses the previously imported bundle if unchanged and still available, while permission checks still run. Temporary files are limited to a generated import directory and removed after import. A failed import never creates a partly populated product bundle; already imported managed assets are retained rather than deleting user/library data. Shutdown waits for the transfer to settle.
+
+Studio opens a new project form with that bundle selected, Post chosen initially and a suggested name. Switching Post/Reel chooses an existing matching saved theme when available. If none exists, the normal theme selection/create requirement remains; no prompts/themes are fabricated. Photos keep their bundle order for the existing Post workflow. Saving/generation behavior is unchanged and no Flow generation starts from Product Find. Unknown commercial photo permission allows History review/link copying but blocks photo transfer, as it blocks image export. Older snapshots are not labelled fresh; Start project uses refreshed current records.
+
+This revision was source-reviewed only. No tests, runtime/browser probes, retailer searches or model calls were run, per the owner's latest instruction. Required installer compilation/packaging is recorded below. Earlier test/delivery notes describe earlier revisions.
+
+**Preview.57 delivery:** the installer build completed required TypeScript checks, Vite build and Electron compilation. Packaging initially failed repeatedly with `EBUSY` while writing the output executable's ASAR integrity resource, including one isolated alternate output path. A bounded, build-process-only retry now applies to the same transiently locked executable write under `release/*/win-unpacked`; the original integrity bytes/options and security checks are retained. No app/scanner was stopped and no permissions were weakened. Packaging-only retry completed successfully. The failed alternate output directory created by this run was removed after path, link and personal-data checks; existing builds/user data were preserved.
+
+Output: `release/0.13.0-preview.57/Frame-Studio-0.13.0-preview.57-x64-Setup.exe` (176,832,926 bytes). SHA-256: `AB683D17512A1335A21FBA77BCFFBB278E78B685C724711AF5CBB5EE1E84EAE6`. No feature tests or live acceptance runs were performed for this version. Nothing was installed automatically.
 
 ## Preview.56 delivery and verification
 

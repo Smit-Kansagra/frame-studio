@@ -1,5 +1,6 @@
 import { registerDiscovery } from './product-discovery.cjs'
 import { registerReadyPacks } from './ready-packs.cjs'
+import { importPackToStudio } from './pack-studio.cjs'
 import { isProductFindImage } from './product-find.cjs'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, protocol, session, shell } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
@@ -512,7 +513,7 @@ if (primaryInstance) void app.whenReady().then(() => {
   registerBridge()
   registerFlowBridge()
   registerDiscovery(path.join(app.getPath('userData'), 'product-discovery'), authorized, false)
-  closeReadyPacks = registerReadyPacks(path.join(app.getPath('userData'), 'product-discovery'), authorized)
+  closeReadyPacks = registerReadyPacks(path.join(app.getPath('userData'), 'product-discovery'), authorized,(pack,products,licences)=>importPackToStudio(workspace,pack,products,licences))
 
   protocol.handle('frame-media', async request => {
     const url = new URL(request.url)

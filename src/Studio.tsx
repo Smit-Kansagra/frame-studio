@@ -33,8 +33,9 @@ const draftOf = (project: ProjectInfo): ProjectDraft => ({ name: project.name, p
 const placeholders = ['product_name', 'product_description', 'product_notes', 'scene_number', 'scene_prompt', 'aspect_ratio', 'target_duration']
 
 export function Studio({ route, onDirty, onBusy }: { route: string } & Guards) {
-  const segment = route.replace(/^#/, '').split('/')[1]
-  return segment ? <ProjectEditor key={segment} id={segment === 'new' ? undefined : segment} onDirty={onDirty} onBusy={onBusy} /> : <StudioHome onBusy={onBusy} />
+  const [pathname,query='']=route.replace(/^#/, '').split('?'),segment=pathname.split('/')[1]
+  const seedProductId=segment==='new'?new URLSearchParams(query).get('product')??undefined:undefined
+  return segment ? <ProjectEditor key={segment+(seedProductId??'')} id={segment === 'new' ? undefined : segment} seedProductId={seedProductId} onDirty={onDirty} onBusy={onBusy} /> : <StudioHome onBusy={onBusy} />
 }
 
 function StudioHome({ onBusy }: { onBusy: Guards['onBusy'] }) {
@@ -446,7 +447,7 @@ function ExportPanel({ project, onBack }: { project: ProjectInfo; onBack: () => 
   </section>
 }
 
-function ProjectEditor({ id, onDirty, onBusy }: { id?: string } & Guards) {
+function ProjectEditor({ id, seedProductId, onDirty, onBusy }: { id?: string; seedProductId?:string } & Guards) {
   const api = window.frameStudio?.projects ? window.frameStudio : undefined
   const [form, setForm] = useState<ProjectDraft>(empty), [saved, setSaved] = useState<ProjectInfo | null>(null)
   const [products, setProducts] = useState<ProductInfo[]>([]), [themes, setThemes] = useState<ThemeInfo[]>([]), [characters, setCharacters] = useState<CharacterInfo[]>([])
@@ -460,14 +461,15 @@ function ProjectEditor({ id, onDirty, onBusy }: { id?: string } & Guards) {
   useEffect(() => { onBusy(busy || productBusy); return () => onBusy(false) }, [busy, productBusy, onBusy])
   useEffect(() => { let active = true; if (!api) { setLoading(false); return }
     setLoading(true); setError('')
-    void Promise.all([api.products.list(), api.products.trash(), api.themes.list(), api.characters.list(), id ? api.projects.get(id) : Promise.resolve(null), id ? api.generations.list(id) : Promise.resolve(null)]).then(([p, trash, t, c, project, generations]) => {
+    void Promise.all([api.products.list(), api.products.trash(), api.themes.list(), api.characters.list(), id ? api.projects.get(id) : Promise.resolve(null), id ? api.generations.list(id) : Promise.resolve(null),seedProductId?api.products.get(seedProductId):Promise.resolve(null)]).then(([p, trash, t, c, project, generations,seed]) => {
       if (!active) return
       setProducts(unwrap(p).items); setProductTrash(unwrap(trash)); setThemes(unwrap(t)); setCharacters(unwrap(c))
       if (project) { const value = unwrap(project), draft = draftOf(value); setSaved(value); setForm(draft); baseline.current = JSON.stringify(draft) }
+      else if(seed){const product=unwrap(seed),theme=unwrap(t).find(theme=>theme.outputType==='post');setProducts(current=>[product,...current.filter(p=>p.id!==product.id)]);setForm({...empty(),name:product.name,productId:product.id,outputType:'post',preset:theme?presetForTheme(theme):'post-square',duration:0,themeId:theme?.id??'',...(theme?{storyboard:copyStoryboard(theme)}:{})});setNotice('Product Find photos are ready in their numbered order. Choose your project name and Post/Reel. An existing compatible theme is selected when available.')}
       if(generations?.ok&&generations.value.length)setStep('Clips')
     }).catch(cause => { if (active) setError(message(cause)) }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [api, id, retry])
+  }, [api, id, seedProductId, retry])
   const choice = <T extends { id: string },>(list: T[], selected: T | undefined) => selected ? list.some(item => item.id === selected.id) ? list.map(item => item.id === selected.id ? selected : item) : [selected, ...list] : list
   const availableProducts = choice(products, saved?.snapshot.product)
   const availableThemes = choice(themes, saved?.snapshot.theme).filter(item => item.outputType === form.outputType)
@@ -482,7 +484,7 @@ function ProjectEditor({ id, onDirty, onBusy }: { id?: string } & Guards) {
   const currentPreset = presets.find(item => item.id === (activeTheme ? presetForTheme(activeTheme) : form.preset))!
   const canSave = !!form.productId && !!form.themeId && !!activeTheme && !busy && !productBusy
   const change = <K extends keyof ProjectDraft>(key: K, value: ProjectDraft[K]) => { setNotice(''); setForm(current => ({ ...current, [key]: value })) }
-  const switchOutput = (outputType: 'post' | 'reel') => setForm(current => ({ ...current, outputType, themeId: '', preset: outputType === 'reel' ? 'reel-vertical' : 'post-square', duration: outputType === 'reel' ? 20 : 0 }))
+  const switchOutput = (outputType: 'post' | 'reel') => {const theme=seedProductId?themes.find(theme=>theme.outputType===outputType):undefined;setForm(current => ({ ...current, outputType, themeId: theme?.id??'', preset: theme?presetForTheme(theme):outputType === 'reel' ? 'reel-vertical' : 'post-square', duration: outputType === 'reel' ? theme?.defaultDuration??20 : 0,...(theme?{storyboard:copyStoryboard(theme)}:{}) }))}
   const selectTheme = (theme: ThemeInfo) => setForm(current => current.themeId === theme.id ? current : ({ ...current, themeId: theme.id, storyboard: copyStoryboard(theme), preset: presetForTheme(theme), duration: current.outputType === 'reel' ? theme.defaultDuration : 0 }))
   const saveCurrent = async () => {
     if (!api || !canSave) return

@@ -2,7 +2,9 @@
 
 A Windows desktop studio for turning product photos into social media posts and reels. Organize products, reusable themes, and character references locally; generate media through your own Google Flow session; review results and export approved images or videos.
 
-**Current version:** `0.13.0-preview.56` (preview).
+**Current version:** `0.13.0-preview.57` (preview).
+
+Preview.57 adds date-ordered Product Find History with expandable saved product details and original links. Start project transfers the collection's numbered primary photos into a Studio product bundle, then opens a new project with that bundle selected. Project name and Post/Reel remain editable; an existing compatible theme is selected when available. Current verification and image-use permission checks apply before copying photos. No generation starts automatically. This revision is source-reviewed and packaged for owner testing; tests and live requests were not run.
 
 Preview.56 updates current connection status, removes stale pairing-success/setup messages, refreshes Advanced continuously and exposes Cancel active search. Product Finder 0.1.4 and Flow Bridge 0.1.10 have compact popups with secondary guidance under Help. Focused fixture tests and a headless isolated Chrome popup check passed; all retailer/network responses and permission APIs in those tests were fixtures. No real retailer access, Google account or paid model request was used. Existing app/Chrome profiles remain untouched.
 

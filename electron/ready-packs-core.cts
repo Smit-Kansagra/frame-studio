@@ -145,5 +145,5 @@ export class PackRepository {
   if(changed)await this.save(s)
   return s
  }
- async save(s:PackStore):Promise<void>{await mkdir(this.folder,{recursive:true});const file=path.join(this.folder,'ready-packs-v1.json');try{await copyFile(file,file+'.bak')}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e}await writeFile(file+'.tmp',JSON.stringify(s,null,2));await rename(file+'.tmp',file)}
+ async save(s:PackStore):Promise<void>{for(const pack of s.packs){if(pack.productIds.length&&(!pack.snapshot||pack.productIds.join('|')!==pack.snapshot.map(p=>p.id).join('|')))pack.snapshot=pack.productIds.flatMap(id=>{const product=s.products.find(p=>p.id===id);return product?[structuredClone(product)]:[]})}await mkdir(this.folder,{recursive:true});const file=path.join(this.folder,'ready-packs-v1.json');try{await copyFile(file,file+'.bak')}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e}await writeFile(file+'.tmp',JSON.stringify(s,null,2));await rename(file+'.tmp',file)}
 }

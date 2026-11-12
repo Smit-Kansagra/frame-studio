@@ -47,3 +47,6 @@
 .find-pairing-code { display:flex; align-items:center; gap:8px; }
 .find-pairing-code input { flex:1; min-width:0; }
 .find-pairing-code button { flex:none; display:inline-flex; align-items:center; justify-content:center; }
+.find-history-entry { border-top:1px solid var(--border); padding:14px 0; }
+.find-history-summary { display:grid; gap:6px; width:100%; text-align:left; padding:12px; color:inherit; background:var(--surface); border:1px solid var(--border); border-radius:10px; cursor:pointer; }
+.find-history-summary small { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

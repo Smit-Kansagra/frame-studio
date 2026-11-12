@@ -11,6 +11,7 @@ export function ProductFind() {
   const [customize, setCustomize] = useState(false)
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('')
   const [brokenPhotos, setBrokenPhotos] = useState<Record<string, string>>({})
+  const [historyOpen, setHistoryOpen] = useState(false), [historyId, setHistoryId] = useState<string|null>(null)
   const refreshed = useRef('')
   useEffect(() => {
     if (!api) return
@@ -37,6 +38,7 @@ export function ProductFind() {
     try {
       const result = await api.action(action)
       setState(await api.status())
+      if(action.type==='studio'&&result&&typeof result==='object'&&'productId' in result&&typeof result.productId==='string')window.location.hash='#studio/new?product='+encodeURIComponent(result.productId)
       if (success) setNotice(success)
       else if (action.type === 'export' && typeof result === 'string') setNotice('Saved: ' + result)
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
@@ -54,6 +56,8 @@ export function ProductFind() {
   }) ?? []
   const permitted = (p: PackProduct) => p.images.length > 0 && p.images.every(i => i.variant === p.variant && i.permission === 'permitted' && !!i.permissionNote.trim())
   const exportReady = !!pack && products.length === pack.productIds.length && products.length > 0 && products.every(({ p }) => permitted(p) && !p.images.some(i => brokenPhotos[p.id] === i.url))
+  const studioReady=!!pack&&products.length===pack.productIds.length&&products.length>0&&products.every(({p})=>p.images[0]?.permission==='permitted'&&!!p.images[0].permissionNote.trim())
+  const history=[...(state?.packs??[])].filter(pack=>pack.productIds.length).sort((a,b)=>Date.parse(b.createdAt)-Date.parse(a.createdAt))
   const incomplete = !!state?.searchSession && !!pack && products.length > 0 && ['drafted', 'exported'].includes(pack.state) && products.length < pack.requested
   const shownStores = state?.providers ?? []
   const setupRequired = state?.actionableError?.code === 'source-setup' || state?.actionableError?.code === 'source-blocked'
@@ -94,12 +98,14 @@ export function ProductFind() {
       <p>{exportReady ? 'Photo export ready.' : 'Photo permission required or listing refresh needed. You can review products and copy their links.'}</p>
       {products.length < pack.productIds.length && <><p>Some saved products need fresh listing facts or a matching photo. They are hidden until verified.</p>{pack.productIds.map((id, index) => !state?.reviewableIds?.[pack.id]?.includes(id) && <button key={id} className="button button-secondary" disabled={locked || !['drafted', 'exported'].includes(pack.state)} onClick={() => void act({ type: 'replace', packId: pack.id, productId: id })}>Replace unverified item #{index + 1}</button>)}</>}
       <div className="find-actions">
+        <button className="button button-primary" disabled={locked||!studioReady} onClick={()=>void act({type:'studio',packId:pack.id})}>{busy?'Working...':'Start project'}</button>
         <button className="button button-secondary" disabled={locked || !products.length || products.length !== pack.productIds.length} onClick={() => void act({ type: 'copy', packId: pack.id }, 'Numbered original product links copied.')}>Copy all product links</button>
         <button className="button button-primary" disabled={locked || !exportReady} onClick={() => void act({ type: 'export', packId: pack.id })}>Download photos + links</button>
         {incomplete && <button className="button button-secondary" disabled={locked} onClick={() => void act({ type: 'more', packId: pack.id })}>Find more matching products</button>}
         <button className="button button-secondary" disabled={locked || !['drafted', 'exported'].includes(pack.state)} onClick={() => void act({ type: 'done', packId: pack.id })}>Done</button>
         <button className="button button-secondary" disabled={locked || !['drafted', 'exported'].includes(pack.state)} onClick={() => void act({ type: 'next', packId: pack.id, value: selection })}>Done / Next collection</button>
       </div>
+      <p>Start project sends the numbered primary photos to Studio. Choose a project name and Post/Reel there. Photo permission is required for transfer.</p>
       <div className="find-grid">{products.map(({ p, number }) => {
         const photo = p.images.find(i => i.variant === p.variant && i.source === p.url) ?? p.images.find(i => i.variant === p.variant)
         return <article className="find-card" key={p.id}>
@@ -123,5 +129,13 @@ export function ProductFind() {
       })}</div>
     </section>}
     {!pack && state?.searchSession && !running && !setupRequired && <section className="find-empty"><p>No collection qualifies yet. Your saved budget and manual overrides remain unchanged. No coverage was consumed.</p></section>}
+    <section className="find-setup find-history"><button className="find-preference-summary" aria-expanded={historyOpen} onClick={()=>setHistoryOpen(open=>!open)}>History ({history.length})</button>
+      {historyOpen&&(!history.length?<p>Your generated collections will appear here automatically.</p>:<div>{history.map(entry=>{
+        const savedProducts=entry.productIds.flatMap(id=>{const p=(entry.snapshot??state?.products??[]).find(p=>p.id===id);return p?[p]:[]})
+        return <article key={entry.id} className="find-history-entry"><button className="find-history-summary" aria-expanded={historyId===entry.id} onClick={()=>setHistoryId(current=>current===entry.id?null:entry.id)}><strong>{entry.subcategory}</strong><span>{new Date(entry.createdAt).toLocaleString()} · {entry.productIds.length} products · {entry.state}</span><small>{savedProducts.slice(0,3).map(p=>p.title).join(' · ')}</small></button>
+          {historyId===entry.id&&<><p>Saved collection: INR {entry.min}–{entry.max}. Prices and photos below are historical observations.</p><div className="find-grid">{savedProducts.map((p,index)=><article className="find-card" key={p.id}>{p.images[0]&&<div className="find-photo"><img src={p.images[0].url} alt={p.title} loading="lazy" referrerPolicy="no-referrer"/></div>}<strong>#{index+1} · {p.title}</strong><p>INR {p.price??'unknown'} · {storeNames[p.retailer]??p.retailer} · {p.variant}</p><p>Observed: {p.observedAt?new Date(p.observedAt).toLocaleString():'unknown'}</p><input className="find-selectable-link" aria-label={'Saved product link '+(index+1)} readOnly value={p.url} onFocus={e=>e.target.select()}/><div className="find-actions"><button className="button button-secondary" disabled={busy} onClick={()=>void act({type:'history-open',packId:entry.id,productId:p.id})}>Open product</button><button className="button button-secondary" disabled={busy} onClick={()=>void act({type:'history-copy',packId:entry.id,productId:p.id},'Original product link copied.')}>Copy link</button></div></article>)}</div><button className="button button-primary" disabled={locked} onClick={()=>void act({type:'studio',packId:entry.id})}>Start project from this collection</button><p>Studio transfer checks current listing facts and photo permission first.</p></>}
+        </article>
+      })}</div>)}
+    </section>
   </div>
 }

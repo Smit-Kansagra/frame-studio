@@ -17,9 +17,10 @@ import { flipkartProvider } from './ready-packs-providers.cjs'
 import type { Keys } from './ready-packs-providers.cjs'
 import { exportZip } from './ready-packs-export.cjs'
 import { allowDiscoveryImages } from './product-find.cjs'
-import type { PackAction } from './ready-packs-types.cjs'
-export function registerReadyPacks(folder:string,authorized:(e:IpcMainInvokeEvent)=>boolean){
+import type { PackAction, ReadyPack, PackProduct, ProviderLicence } from './ready-packs-types.cjs'
+export function registerReadyPacks(folder:string,authorized:(e:IpcMainInvokeEvent)=>boolean,importPack:(pack:ReadyPack,products:PackProduct[],licences:ProviderLicence[])=>Promise<string>){
  const keysFile=path.join(folder,'pack-keys.bin');let closing=false
+ let studioWork:Promise<void>|null=null
  const extensionReady=prepareProductExtension(app.getPath('userData'),app.isPackaged?path.join(process.resourcesPath,'product-finder'):path.resolve(__dirname,'../extension-product-finder')).then(folder=>({folder,error:''})).catch(error=>({folder:'',error:error instanceof Error?error.message:'Product Finder files could not be updated.'}))
  async function productExtensionFolder(){const ready=await extensionReady;if(ready.error)throw new Error(ready.error);return ready.folder}
  const browser=new ProductBrowser()
@@ -31,9 +32,11 @@ export function registerReadyPacks(folder:string,authorized:(e:IpcMainInvokeEven
   const catalogues=(service.state?.catalogues??[]).map((c):Provider=>{try{return wooCatalogueProvider(c)}catch{return{status:{id:c.id,name:c.name,status:'Catalogue configuration is invalid; saved data preserved.',readiness:'needs-access',route:'WooCommerce Store API',setupAction:'Review saved catalogue scope in Settings.',capabilities:{search:false,details:false,images:false,evidence:false}}}}})
   return[flipkart,libasProvider(service.state?.licences??[],discoveryDiagnostics('libas: selected theme')),...catalogues,...['myntra','meesho','amazon','ajio'].map(id=>browserProvider(id,browser,service.state?.licences??[]))]
  },(store,slot,signal)=>reasonPack(folder,store,slot,signal))
- ipcMain.handle('ready-packs:status',async e=>{if(!authorized(e))throw new Error('Unauthorized pack request.');const s=await service.connectionStatus();s.browserStatus=browser.status();s.aiStatus=structuredClone(accountReasoner(folder).status);allowDiscoveryImages(s.products.flatMap(p=>p.images.map(i=>i.url)));return s})
+ ipcMain.handle('ready-packs:status',async e=>{if(!authorized(e))throw new Error('Unauthorized pack request.');const s=await service.connectionStatus();s.browserStatus=browser.status();s.aiStatus=structuredClone(accountReasoner(folder).status);allowDiscoveryImages([...s.products,...s.packs.flatMap(pack=>pack.snapshot??[])].flatMap(p=>p.images.map(i=>i.url)));return s})
  ipcMain.handle('ready-packs:action',async(e,action:PackAction)=>{if(closing||!authorized(e)||!action||typeof action.type!=='string')throw new Error('Unauthorized request or application is closing.');await service.ready;const id=action.packId??''
  switch(action.type){
+ case'studio':{if(studioWork||service.busy)throw new Error('Wait for the current search or import to finish.');let productId='';const work=(async()=>{await service.refresh(id);if(closing)throw new Error('App is closing; Studio transfer was not started.');await service.mutate(async()=>{const pack=service.pack(id);productId=await importPack(pack,service.state.products,service.state.licences??[])})})();studioWork=work;try{await work;return{productId}}finally{studioWork=null}}
+ case'history-open':case'history-copy':{const pack=service.pack(id);if(!pack.productIds.includes(action.productId??''))throw new Error('Product is not in this history entry.');const product=(pack.snapshot??service.state.products).find(p=>p.id===action.productId);if(!product||canonical(product.url,product.catalogue).id!==product.id)throw new Error('Saved original link is invalid.');if(action.type==='history-copy')clipboard.writeText(product.url);else await shell.openExternal(product.url);return}
  case'browser-folder':{const result=await shell.openPath(await productExtensionFolder());if(result)throw new Error(result);return}
  case'browser-copy-code':{clipboard.writeText(browser.pairingCode());return}
  case'browser-pair':{await productExtensionFolder();await service.mutate(async()=>{for(const id of Object.keys(browserStores))if(service.state.sourceHealth)delete service.state.sourceHealth[id]});return browser.pair()}
@@ -67,5 +70,5 @@ export function registerReadyPacks(folder:string,authorized:(e:IpcMainInvokeEven
  default:throw new Error('Unknown pack action.')
  }})
  // Main owns shutdown ordering; do not race its workspace/Flow cleanup with another app.quit().
- return async()=>{closing=true;await service.cancel();await browser.close();await extensionReady}
+ return async()=>{closing=true;await service.cancel();await studioWork?.catch(()=>{});await browser.close();await extensionReady}
 }
