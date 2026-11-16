@@ -1,8 +1,8 @@
-﻿# Frame Studio
+# Frame Studio
 
 A Windows desktop studio for turning product photos into social media posts and reels. Organize products, reusable themes, and character references locally; generate media through your own Google Flow session; review results and export approved images or videos.
 
-**Current version:** `0.13.0-preview.57` (preview).
+**Current version:** `0.13.0-preview.58` (preview).
 
 Preview.57 adds date-ordered Product Find History with expandable saved product details and original links. Start project transfers the collection's numbered primary photos into a Studio product bundle, then opens a new project with that bundle selected. Project name and Post/Reel remain editable; an existing compatible theme is selected when available. Current verification and image-use permission checks apply before copying photos. No generation starts automatically. This revision is source-reviewed and packaged for owner testing; tests and live requests were not run.
 

@@ -53,6 +53,12 @@ export function classify(p:PackProduct,categories:Category[]):void {
   if(sub&&category){p.category=category.id;p.subcategory=sub;p.assessment.fit='Observed listing length: '+length;return}
  }
  p.category='';p.subcategory='';const title=p.title.toLowerCase();const aliases:Record<string,string>={'short kurtis':'short kurti|short kurta','long kurtis':'long kurti|long kurta','shorts':'shorts','tops':'top','T-shirts':'t-shirt|tshirt','casual co-ords':'co-ord|coord','casual dresses':'casual dress','kurta':'kurta set','suit sets':'suit set','shirts':'shirt','tunics':'tunic','festive gowns':'gown','Indo-western':'indo western','party dresses':'party dress','modest clothing':'modest','maternity':'maternity','nursing':'nursing'}
+ // A named co-ord is the complete outfit, not separate top/trouser categories.
+ // Require the listing's explicit outfit label; search placement is not evidence.
+ if(/\bco[\s\-\u2010-\u2015]*ords?\b/i.test(title)){
+  const outfits=categories.filter(c=>c.subcategories.includes('casual co-ords'))
+  if(outfits.length===1){p.category=outfits[0].id;p.subcategory='casual co-ords';p.assessment.fit='Listing explicitly identifies a co-ord outfit';return}
+ }
  const matches: {c:Category;sub:string}[]=[]
  for(const c of categories)for(const sub of c.subcategories){if(sub==='shirts'&&/t[ -]?shirt/.test(title))continue;const terms=(aliases[sub]??sub.replace(/s$/,'')).split('|');if(terms.some(t=>new RegExp('\\b'+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'s?\\b','i').test(title)))matches.push({c,sub})}
  if(matches.length===1){p.category=matches[0].c.id;p.subcategory=matches[0].sub;p.assessment.fit='Listing title matches '+p.subcategory}else if(matches.length>1)p.failures.push('Ambiguous category; review classification in an imported record.')

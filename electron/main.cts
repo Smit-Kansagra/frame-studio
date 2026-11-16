@@ -291,6 +291,17 @@ function registerBridge() {
     if (args.length !== 1) return invalid
     return workspace.themeOperation(themes => themes.save(args[0]))
   })
+  ipcMain.handle('themes:import-video', async (event, ...args: unknown[]) => {
+    if (!authorized(event)) return denied
+    if (args.length) return invalid
+    if (picking) return { ok: false, error: { code: 'BUSY', message: 'Finish the current file selection first.' } }
+    picking = true
+    try {
+      const choice = await dialog.showOpenDialog(mainWindow!, { title: 'Choose a reference video', properties: ['openFile'], filters: [{ name: 'Videos', extensions: ['mp4', 'mov', 'webm'] }] })
+      return choice.canceled || !choice.filePaths.length ? { ok: true, value: null } : await workspace.themeOperation(themes => themes.importVideo(choice.filePaths[0]))
+    } catch (error) { return failure(error) }
+    finally { picking = false }
+  })
   ipcMain.handle('themes:import-prompt', async (event, ...args: unknown[]) => {
     if (!authorized(event)) return denied
     if (args.length) return invalid
@@ -523,13 +534,17 @@ if (primaryInstance) void app.whenReady().then(() => {
     const expectedOrigin = devUrl ?? appOrigin
     const validAsset = url.host === 'asset' && match && UUID_PATTERN.test(match[1])
     const validAttempt = url.host === 'attempt' && attempt && UUID_PATTERN.test(attempt[1])
+    const validThemeVideo = url.host === 'theme-video' && attempt && UUID_PATTERN.test(attempt[1])
     const exportId = /^\/([0-9a-f-]{36})$/.exec(url.pathname)
     const validExport = url.host === 'export' && exportId && UUID_PATTERN.test(exportId[1])
-    if ((!validAsset && !validAttempt && !validExport) || url.search || !['GET', 'HEAD'].includes(request.method) || (initiator && initiator !== expectedOrigin)) return new Response('Not found', { status: 404 })
+    if ((!validAsset && !validAttempt && !validExport && !validThemeVideo) || url.search || !['GET', 'HEAD'].includes(request.method) || (initiator && initiator !== expectedOrigin)) return new Response('Not found', { status: 404 })
     try {
-      const filename = validAttempt ? await workspace.attemptFile(attempt![1]) : validExport ? (await workspace.exportMedia(exportId![1])).path : await workspace.mediaFile(match![1], match![2] as 'original' | 'thumbnail')
+      const video = validThemeVideo ? await workspace.themeOperation(themes => themes.videos.file(attempt![1])) : undefined
+      if (video && !video.ok) return new Response('Video unavailable', { status: 404 })
+      const filename = video?.ok ? video.value.path : validAttempt ? await workspace.attemptFile(attempt![1]) : validExport ? (await workspace.exportMedia(exportId![1])).path : await workspace.mediaFile(match![1], match![2] as 'original' | 'thumbnail')
       const response = await net.fetch(pathToFileURL(filename).toString(), { method: request.method, headers: request.headers })
       const headers = new Headers(response.headers)
+      if (video?.ok) headers.set('Content-Type', video.value.mediaType)
       if (validAttempt) {
         const result = await workspace.generationOperation(generations => generations.resultFile(attempt![1]))
         if (!result.ok) return new Response('Result unavailable', { status: 404 })

@@ -5,8 +5,6 @@ import type { Provider } from './ready-packs-providers.cjs'
 import { accountReasoner } from './antigravity-account.cjs'
 import { reasonPack } from './ready-packs-ai.cjs'
 import { validateLicence } from './ready-packs-licences.cjs'
-import { libasProvider } from './ready-packs-libas.cjs'
-import { discoveryDiagnostics } from './ready-packs-diagnostics.cjs'
 import { app, clipboard, dialog, ipcMain, safeStorage, shell } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { mkdir, readFile, writeFile, rename, stat } from 'node:fs/promises'
@@ -30,7 +28,7 @@ export function registerReadyPacks(folder:string,authorized:(e:IpcMainInvokeEven
   try{k=await keys()}catch{keyError='Saved Flipkart credentials could not be unlocked; file preserved. Other sources remain available.'}
   const flipkart=k.flipkartId&&k.flipkartToken?flipkartProvider(k):browserProvider('flipkart',browser,service.state?.licences??[]);if(keyError)flipkart.status.status=keyError
   const catalogues=(service.state?.catalogues??[]).map((c):Provider=>{try{return wooCatalogueProvider(c)}catch{return{status:{id:c.id,name:c.name,status:'Catalogue configuration is invalid; saved data preserved.',readiness:'needs-access',route:'WooCommerce Store API',setupAction:'Review saved catalogue scope in Settings.',capabilities:{search:false,details:false,images:false,evidence:false}}}}})
-  return[flipkart,libasProvider(service.state?.licences??[],discoveryDiagnostics('libas: selected theme')),...catalogues,...['myntra','meesho','amazon','ajio'].map(id=>browserProvider(id,browser,service.state?.licences??[]))]
+  return[flipkart,...catalogues,...['myntra','meesho','amazon','ajio'].map(id=>browserProvider(id,browser,service.state?.licences??[]))]
  },(store,slot,signal)=>reasonPack(folder,store,slot,signal))
  ipcMain.handle('ready-packs:status',async e=>{if(!authorized(e))throw new Error('Unauthorized pack request.');const s=await service.connectionStatus();s.browserStatus=browser.status();s.aiStatus=structuredClone(accountReasoner(folder).status);allowDiscoveryImages([...s.products,...s.packs.flatMap(pack=>pack.snapshot??[])].flatMap(p=>p.images.map(i=>i.url)));return s})
  ipcMain.handle('ready-packs:action',async(e,action:PackAction)=>{if(closing||!authorized(e)||!action||typeof action.type!=='string')throw new Error('Unauthorized request or application is closing.');await service.ready;const id=action.packId??''

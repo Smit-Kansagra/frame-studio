@@ -1,4 +1,20 @@
-# Product Find — Auto workflow (0.13.0-preview.57)
+# Product Find — Auto workflow (0.13.0-preview.58)
+
+## Preview.58 delivery
+
+Unpackaged follow-up: the main Find action now checks current platform ranks and currently eligible checked stores before resuming a partial collection. If they differ from its saved snapshot, it starts a new collection with current controls and preserves the previous collection in History. Explicit Find more retains the earlier store/theme snapshot while respecting disabled platforms. Diagnosed from saved local state: the prior partial used Myntra only and Flipkart priority 6, while current settings disabled Myntra and changed Flipkart to 3. No tests, build, live search or model calls were run for this follow-up; the existing preview.58 installer does not include it.
+
+Includes the explicit co-ord classification fix, saved platform enable/disable checkboxes, and removal of Libas from active sources. Existing records and credentials are retained. Installer build runs the repository's required TypeScript compilation and packaging; feature tests, live retailer requests and model calls are not run, per user instruction. Prior generated release folders are removed only after the new installer is produced. Source, dependencies, build tools, user libraries and profile data are retained.
+
+Output: `release/0.13.0-preview.58/Frame-Studio-0.13.0-preview.58-x64-Setup.exe`. The earlier sections describe historical builds; changes labelled unpackaged below were packaged starting with preview.58.
+
+Build completed successfully. Installer size: 176,834,243 bytes. Removed generated preview.54–preview.57 release folders and preview.58's redundant unpacked copy/build debug file. Retained the new installer, blockmap/update metadata, source, build caches and dependencies. No installation or runtime acceptance test was performed.
+
+## Unpackaged co-ord classification fix
+
+Platform priority now includes saved per-platform checkboxes (`settings.storeEnabled`). Unchecked sources cannot supply new selections in Auto/manual searches, partial retries, AI candidate pools or replacements. Existing collection/history records remain available; unchecked existing items are not erased. Checkbox changes do not add newly checked stores to an existing partial collection's saved store list; start a new collection to use newly enabled stores. Legacy settings without the field preserve existing enabled behavior. Libas is removed from the active provider factory and setup/priority lists; its historical products, licences and adapter source remain intact for preservation. Checkbox/rank settings require Save platforms and priority. No tests, typecheck, build, live collection or model calls were run for these source changes.
+
+Read-only inspection of the saved 2026-11-15 Myntra collection found explicit titles such as “Rock.it Women Solid Crop Top with Trousers Co-ord Set” and “THE FIT ALPHA Round Neck Top With Trousers Co-Ords” left unclassified because outfit and component categories all matched. Explicit co-ord outfit labels now take precedence over generic component matches, including space and Unicode dash spellings. Generic “top with trousers” titles without an explicit co-ord label remain subject to the existing conservative rules. Prices, freshness, stock, exact photo identity, cooldown, store selection and image rights checks are unchanged. No saved user records were edited. This source change is not included in the existing preview.57 installer; no tests, typecheck, build, retailer requests or model calls were run for this fix, per user instruction.
 
 ## Preview.57: History and Start project
 

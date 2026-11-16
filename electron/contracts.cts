@@ -46,15 +46,17 @@ export type ImageTransform = { rotation: 0 | 90 | 180 | 270; crop: { x: number; 
 export type ThemeScene = { id: string; name: string; prompt: string; duration: number; relationship: 'new-shot' | 'continue'; transition: 'cut' }
 export type ThemeReferenceInstructions = { assetId: string; name: string; compositionPrompt: string; negativePrompt: string }
 export type ThemeReferenceSelection = ThemeReferenceInstructions & { compositionSource: 'reference' | 'shared' }
+export type ThemeVideo = { id: string; originalName: string; byteSize: number; originalUrl: string; available: boolean }
 export type ThemeContent = {
   name: string; description: string; coverAssetId: string | null; referenceAssetIds: string[]
   masterPrompt: string; outputType: 'post' | 'reel'; aspectRatio: '9:16' | '16:9' | '1:1' | '4:5' | '3:4' | '1.91:1'
   defaultDuration: number; compositionPrompt: string; scenes: ThemeScene[]
   referenceInstructions?: ThemeReferenceInstructions[]; negativePrompt?: string
   coverUseCount?: number | 'unlimited'
+  storyboardAssetId?: string | null; referenceVideoIds?: string[]
 }
 export type ThemeDraft = ThemeContent & { id?: string; expectedRevision?: number }
-export type ThemeInfo = ThemeContent & { id: string; revision: number; createdAt: string; updatedAt: string; images: ProductPhoto[] }
+export type ThemeInfo = ThemeContent & { id: string; revision: number; createdAt: string; updatedAt: string; images: ProductPhoto[]; videos?: ThemeVideo[] }
 export type ThemeTrashInfo = { token: string; themeName: string; removedAt: string }
 export type CharacterContent = { name: string; category: 'female' | 'male' | 'other' | null; assetIds: string[]; primaryAssetId: string }
 export type CharacterDraft = CharacterContent & { id?: string; expectedRevision?: number }
@@ -185,6 +187,7 @@ export type FrameStudioAPI = {
     trash: () => Promise<AppResult<ThemeTrashInfo[]>>
     undo: (token: string) => Promise<AppResult<ThemeInfo>>
     importPrompt: () => Promise<AppResult<{ name: string; text: string } | null>>
+    importVideo: () => Promise<AppResult<ThemeVideo | null>>
   }
   characters: {
     list: () => Promise<AppResult<CharacterInfo[]>>

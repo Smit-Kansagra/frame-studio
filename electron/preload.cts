@@ -100,6 +100,7 @@ const bridge: FrameStudioAPI = {
     trash: () => ipcRenderer.invoke('themes:trash'),
     undo: token => ipcRenderer.invoke('themes:undo', token),
     importPrompt: () => ipcRenderer.invoke('themes:import-prompt'),
+    importVideo: () => ipcRenderer.invoke('themes:import-video'),
   },
   characters: {
     list: () => ipcRenderer.invoke('characters:list'),

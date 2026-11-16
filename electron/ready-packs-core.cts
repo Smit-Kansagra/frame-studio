@@ -15,6 +15,7 @@ export function validateStoreRanks(raw:unknown):StoreRanks {
  return ranks
 }
 export const storePriority=(id:string,ranks:StoreRanks|undefined)=>ranks?.[id]??100
+export const storeSelected=(id:string,settings:PackSettings)=>id!=='libas'&&settings.storeEnabled?.[id]!==false
 export const budgetMaximum=(selection:Pick<FindSelection,'max'|'extraBudgetInr'>)=>selection.max+(selection.extraBudgetInr??0)
 export function validateSelection(raw:unknown,settings:PackSettings):FindSelection {
  const s=raw as FindSelection
@@ -67,6 +68,7 @@ export function validateSettings(raw:unknown):PackSettings {
  if(!s||![4,5,6].includes(s.size)||!Number.isInteger(s.cooldownDays)||s.cooldownDays<0||s.cooldownDays>365||typeof s.scheduled!=='boolean'||!Array.isArray(s.categories)||!s.categories.length||s.categories.length>60)throw new Error('Invalid pack settings.')
  for(const v of [s.season,s.occasion,s.attributes])if(typeof v!=='string'||v.length>300)throw new Error('Invalid audience preferences.')
  const ids=new Set<string>();for(const c of s.categories){if(!c||typeof c.id!=='string'||ids.has(c.id)||typeof c.name!=='string'||!c.name.trim()||c.name.length>120||!Array.isArray(c.subcategories)||!c.subcategories.length||c.subcategories.some(x=>typeof x!=='string'||!x.trim()||x.length>100)||!Number.isFinite(c.min)||!Number.isFinite(c.max)||c.min<0||c.max<c.min||typeof c.deferred!=='string'||c.deferred.length>300||c.specialist!==undefined&&typeof c.specialist!=='boolean'||c.autoEnabled!==undefined&&typeof c.autoEnabled!=='boolean')throw new Error('Invalid category or budget.');ids.add(c.id)}
+ if(s.storeEnabled!==undefined&&(!s.storeEnabled||typeof s.storeEnabled!=='object'||Array.isArray(s.storeEnabled)||Object.keys(s.storeEnabled).length>20||Object.entries(s.storeEnabled).some(([id,on])=>(!findStores.includes(id)&&!/^catalogue:[a-z0-9-]{1,40}$/.test(id))||typeof on!=='boolean')))throw new Error('Invalid platform checkbox selection.')
  const savedAi=s.ai as any;const ai=!savedAi?{provider:'antigravity',model:'',effort:'medium'}:['ollama','local','hybrid'].includes(typeof savedAi==='string'?savedAi:savedAi.provider)?{provider:'antigravity',model:'',effort:'medium'}:savedAi;if(!['antigravity','none'].includes(ai.provider)||typeof ai.model!=='string'||ai.model.length>100||!['medium','high'].includes(ai.effort))throw new Error('Invalid account reasoning settings.');return {...structuredClone(s),storeRanks:validateStoreRanks(s.storeRanks),ai:structuredClone(ai)}
 }
 export function matchingPhoto(p:PackProduct):boolean {
@@ -85,7 +87,7 @@ export function reviewable(p:PackProduct,pack:Pick<ReadyPack,'category'|'subcate
 export function eligible(p:PackProduct,pack:Pick<ReadyPack,'category'|'subcategory'|'min'|'max'|'stores'>,store:PackStore,exclude=new Set<string>(),now=Date.now()):boolean {
  const attributes=store.settings.attributes.toLowerCase();const required=['plus-size','petite','tall'].filter(a=>attributes.includes(a));const attributeFit=required.every(a=>p.title.toLowerCase().includes(a)||a==='plus-size'&&/\b(plus size|[2-9]xl|xxxl)\b/i.test(p.title+' '+p.sizes.join(' ')))
  const family=[p,...store.products.filter(x=>x.id!==p.id&&p.garmentId&&x.retailer===p.retailer&&x.garmentId===p.garmentId)]
- return reviewable(p,pack,now)&&attributeFit&&!exclude.has(p.id)&&!family.some(x=>x.lastUsedAt&&(!Number.isFinite(Date.parse(x.lastUsedAt))||now-Date.parse(x.lastUsedAt)<store.settings.cooldownDays*86400000))&&!store.packs.some(x=>['drafted','exported'].includes(x.state)&&family.some(member=>x.productIds.includes(member.id)))
+ return storeSelected(p.retailer,store.settings)&&reviewable(p,pack,now)&&attributeFit&&!exclude.has(p.id)&&!family.some(x=>x.lastUsedAt&&(!Number.isFinite(Date.parse(x.lastUsedAt))||now-Date.parse(x.lastUsedAt)<store.settings.cooldownDays*86400000))&&!store.packs.some(x=>['drafted','exported'].includes(x.state)&&family.some(member=>x.productIds.includes(member.id)))
 }
 export function selectProducts(pool:PackProduct[],count:number,options:{storeRanks?:StoreRanks;preferredIds?:string[];retained?:PackProduct[]}={}):PackProduct[] {
  const result:PackProduct[]=[];const ids=new Set<string>(),garments=new Set<string>(),photos=new Set<string>(),titles=new Set<string>()

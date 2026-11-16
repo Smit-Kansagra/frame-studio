@@ -7,6 +7,7 @@ import { applyLicences } from './ready-packs-licences.cjs'
 import { discoveryDiagnostics, reject } from './ready-packs-diagnostics.cjs'
 import { budgetMaximum, PackRepository, assemble, canonical, defaultFindSelection, eligible, matchingPhoto, photoReady, reviewable, selectProducts, storePriority, validateSelection, validateSettings, validateStoreRanks } from './ready-packs-core.cjs'
 import { classify, importProducts } from './ready-packs-providers.cjs'
+import { storeSelected } from './ready-packs-core.cjs'
 import type { Provider } from './ready-packs-providers.cjs'
 import type { PackStore, PackProduct, Performance, ReadyPack } from './ready-packs-types.cjs'
 import { publicHttps } from './product-find-data.cjs'
@@ -35,7 +36,7 @@ export class PackService {
   const copy=await this.status()
   if(copy.actionableError?.code!=='source-setup'||this.busy)return copy
   const preferences=copy.preferences??defaultFindSelection()
-  const available=copy.providers.filter(p=>['configured-unverified','accessible'].includes(p.readiness??'')&&(preferences.storeMode==='auto'||preferences.stores.includes(p.id))&&storePriority(p.id,copy.settings.storeRanks)<=(preferences.maxStorePriority??100))
+  const available=copy.providers.filter(p=>storeSelected(p.id,copy.settings)&&['configured-unverified','accessible'].includes(p.readiness??'')&&(preferences.storeMode==='auto'||preferences.stores.includes(p.id))&&storePriority(p.id,copy.settings.storeRanks)<=(preferences.maxStorePriority??100))
   if(available.length){copy.actionableError=undefined;if(copy.job.state==='error'&&copy.job.message==='Product source setup required')copy.job={...copy.job,state:'idle',message:'Chrome connected. Click Find my next post to start a new search.'}}
   return copy
  }
@@ -56,7 +57,14 @@ export class PackService {
   const preferences=validateSelection(value??this.state.preferences??defaultFindSelection(),this.state.settings)
   if(doneId)await this.done(doneId)
   const session=this.state.searchSession,pack=session?.packId?this.pack(session.packId):null
-  if(pack&&['drafted','exported'].includes(pack.state)&&pack.productIds.length<pack.requested&&session&&preferences.category===session.selection.category&&preferences.min===session.selection.min&&preferences.max===session.selection.max&&(preferences.extraBudgetInr??0)===(session.selection.extraBudgetInr??0)&&(preferences.maxStorePriority??100)===(session.selection.maxStorePriority??100)&&preferences.size===session.selection.size&&preferences.storeMode===session.selection.storeMode)return this.find(session.selection,true)
+  // The main Find action must use today's saved platform controls. Only the
+  // explicit Find more action keeps an earlier collection's store snapshot.
+  const ranks=this.state.settings.storeRanks??{}
+  const providers=await this.providers()
+  const stores=providers.filter(p=>storeSelected(p.status.id,this.state.settings)&&sourceReady(p,this.state)&&(preferences.storeMode==='auto'||preferences.stores.includes(p.status.id))&&storePriority(p.status.id,ranks)<=(preferences.maxStorePriority??100)).map(p=>p.status.id).sort()
+  const sameRanks=!!session&&[...new Set([...Object.keys(ranks),...Object.keys(session.selection.storeRanks??{})])].every(id=>storePriority(id,ranks)===storePriority(id,session.selection.storeRanks))
+  const sameStores=!!session&&JSON.stringify(stores)===JSON.stringify([...session.selection.stores].sort())
+  if(pack&&['drafted','exported'].includes(pack.state)&&pack.productIds.length<pack.requested&&session&&sameRanks&&sameStores&&preferences.category===session.selection.category&&preferences.min===session.selection.min&&preferences.max===session.selection.max&&(preferences.extraBudgetInr??0)===(session.selection.extraBudgetInr??0)&&(preferences.maxStorePriority??100)===(session.selection.maxStorePriority??100)&&preferences.size===session.selection.size&&preferences.storeMode===session.selection.storeMode)return this.find(session.selection,true)
   return this.find(preferences)
  }
  async find(value:unknown,more=false,replacement?:string){
@@ -67,11 +75,11 @@ export class PackService {
    if(!more)this.state.preferences=preferences
    const providers=await this.providers(),ready=providers.filter(p=>sourceReady(p,this.state));this.state.providers=providers.map(p=>sourceStatus(p,this.state))
    const selection:FindSelection={...preferences,storeRanks:structuredClone(more?preferences.storeRanks??{}:this.state.settings.storeRanks??{}),stores:more||preferences.storeMode!=='auto'?preferences.stores:ready.map(p=>p.status.id)}
-   selection.stores=selection.stores.filter(id=>storePriority(id,selection.storeRanks)<=(selection.maxStorePriority??100))
+   selection.stores=selection.stores.filter(id=>storeSelected(id,this.state.settings)&&storePriority(id,selection.storeRanks)<=(selection.maxStorePriority??100))
    selection.stores.sort((a,b)=>storePriority(a,selection.storeRanks)-storePriority(b,selection.storeRanks))
    const usable=ready.filter(p=>selection.stores.includes(p.status.id))
    if(!usable.length){
-    const selectedSources=providers.filter(p=>(preferences.storeMode==='auto'||preferences.stores.includes(p.status.id))&&storePriority(p.status.id,selection.storeRanks)<=(selection.maxStorePriority??100))
+    const selectedSources=providers.filter(p=>storeSelected(p.status.id,this.state.settings)&&(preferences.storeMode==='auto'||preferences.stores.includes(p.status.id))&&storePriority(p.status.id,selection.storeRanks)<=(selection.maxStorePriority??100))
     const paused=selectedSources.some(p=>this.state.sourceHealth?.[p.status.id]?.state==='blocked'||sourceStatus(p,this.state).readiness==='paused')
     const reason=!selectedSources.length?'No source meets your saved store selection and priority cutoff. Review Customize; the cutoff was not relaxed.':'No selected source is ready. '+selectedSources.map(p=>{const status=sourceStatus(p,this.state);return(status.name??status.id)+': '+status.status}).join(' | ')
     this.state.actionableError={code:paused?'source-blocked':'source-setup',message:reason,action:'Review Product Find source access in Settings'}
@@ -135,7 +143,7 @@ export class PackService {
  const session=this.state.searchSession!
  const errors:string[]=[];let resultCount=0,inventoryAccessible=false,usedReasoning=false,photoAccessFailed=false
  try{
- const providers=(await this.providers()).filter(p=>selection.stores.includes(p.status.id)&&sourceReady(p,this.state)).sort((a,b)=>storePriority(a.status.id,selection.storeRanks)-storePriority(b.status.id,selection.storeRanks))
+ const providers=(await this.providers()).filter(p=>storeSelected(p.status.id,this.state.settings)&&selection.stores.includes(p.status.id)&&sourceReady(p,this.state)).sort((a,b)=>storePriority(a.status.id,selection.storeRanks)-storePriority(b.status.id,selection.storeRanks))
  const definition=this.state.settings.categories.find(c=>c.id===slot.category);if(!definition||definition.deferred)throw new Error('Saved category is unavailable or deferred. Choose clothes again.');const category={...definition,min:selection.min,max:budgetMaximum(selection)}
  const queries=themeQueries(slot,this.state.settings.season,this.state.settings.occasion);const query=queries[0]
  const reports=providers.map(p=>{p.diagnostics??=discoveryDiagnostics(p.status.id+': '+query);p.diagnostics.query=p.status.id+': '+queries.join(' | ');return p.diagnostics});this.state.diagnostics=[...(this.state.diagnostics??[]),...reports].slice(-16)

@@ -11,6 +11,7 @@ import { decodeImage, readImageSource, transformImage, validateImageTransform } 
 import { ManagedPaths, UUID_PATTERN } from './paths.cjs'
 import { Products } from './products.cjs'
 import { Themes } from './themes.cjs'
+import { ThemeVideos } from './theme-videos.cjs'
 import { Characters } from './characters.cjs'
 import { Projects } from './projects.cjs'
 import { Generations } from './generations.cjs'
@@ -36,7 +37,7 @@ export class Workspace {
     this.flow = new FlowState(db)
     this.flow.recover()
     this.products = new Products(db, { enqueue: action => this.enqueue(action), asset: id => this.getAsset(id), media: (id, kind) => this.mediaFile(id, kind) })
-    this.themes = new Themes(db, { enqueue: action => this.enqueue(action), asset: id => this.getAsset(id), media: (id, kind) => this.mediaFile(id, kind) })
+    this.themes = new Themes(db, { enqueue: action => this.enqueue(action), asset: id => this.getAsset(id), media: (id, kind) => this.mediaFile(id, kind) }, new ThemeVideos(paths))
     this.characters = new Characters(db, { enqueue: action => this.enqueue(action), asset: id => this.getAsset(id), media: (id, kind) => this.mediaFile(id, kind) })
     this.projects = new Projects(db, { enqueue: action => this.enqueue(action), product: id => this.products.get(id), theme: id => this.themes.get(id), character: id => this.characters.get(id) }, paths)
     this.generations = new Generations(db, paths, id => this.projects.get(id))
