@@ -195,6 +195,30 @@ export class Exports {
         return result
       }
       if (plan.reasons.length) invalid(plan.reasons.join(' '))
+      if (!settings.order.length && !settings.trims.length) {
+        const selected = plan.scenes.length === 1 ? plan.scenes[0] : undefined
+        if (selected?.attemptId && selected.width && selected.height && selected.duration) {
+          const attemptId = selected.attemptId
+          const source = await this.sourceFor(attemptId)
+          if (path.extname(source).toLowerCase() === '.mp4') {
+            temp = await this.validateDestination(destination, '.mp4', (selected.byteSize ?? 0) * 2)
+            progress({ projectId, stage: 'rendering', percent: null, message: 'Saving the approved MP4.' })
+            await copyFile(source, temp, constants.COPYFILE_EXCL)
+            const review = (await this.reviewsFor(projectId)).find(item => item.sceneId === selected.sceneId)
+            if (review?.status !== 'approved' || review.selectedAttemptId !== attemptId) invalid('The Reel approval changed during export. Approve it in Clips and try again.')
+            const result = await this.commit(project, destination, temp, selected.width, selected.height, selected.duration, [attemptId])
+            finalCreated = true; temp = undefined
+            return result
+          }
+        }
+        // Older projects already store their order and edited durations.
+        const scenes = project.storyboard.scenes
+        settings = {
+          ...settings,
+          order: scenes.map(scene => scene.id),
+          trims: scenes.map(scene => ({ sceneId: scene.id, inPoint: 0, outPoint: Math.min(scene.editDuration, plan.scenes.find(info => info.sceneId === scene.id)?.duration ?? 0) })),
+        }
+      }
       const specIds = project.storyboard.scenes.map(scene => scene.id)
       if (settings.order.length !== specIds.length || new Set(settings.order).size !== specIds.length || settings.order.some(id => !specIds.includes(id))) invalid('Include every approved Reel scene exactly once in the export order.')
       const ordered = settings.order.map(id => plan.scenes.find(scene => scene.sceneId === id)!)
@@ -219,7 +243,7 @@ export class Exports {
       const args = ['-hide_banner', '-nostdin', '-y', '-loglevel', 'error', '-stats_period', '0.5', '-progress', 'pipe:1']
       for (const item of media) args.push('-i', item.source)
       args.push('-filter_complex', filters.join(';'), '-map', '[outv]', '-map', '[outa]', '-c:v', plan.videoEncoder ?? 'libx264', ...(plan.videoEncoder === 'libx264' ? ['-preset', 'veryfast', '-crf', '20'] : ['-q:v', '3']), '-pix_fmt', 'yuv420p', '-r', '30', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2', '-movflags', '+faststart', '-f', 'mp4', temp)
-      progress({ projectId, stage: 'rendering', percent: 0, message: 'Combining approved clips offline.' })
+      progress({ projectId, stage: 'rendering', percent: 0, message: 'Exporting the approved Reel.' })
       if (this.cancelled) invalid('Export stopped because the project was deleted or export was cancelled.')
       await this.encode(args, projectId, total, progress)
       progress({ projectId, stage: 'validating', percent: null, message: 'Verifying duration, dimensions, and playable audio/video streams.' })
@@ -306,7 +330,7 @@ export class Exports {
         const entries: Record<string, string> = {}
         for (const line of chunks) { const index = line.indexOf('='); if (index > 0) entries[line.slice(0, index)] = line.slice(index + 1) }
         const time = Number(entries.out_time_us ?? entries.out_time_ms)
-        if (Number.isFinite(time) && duration > 0) progress({ projectId, stage: 'rendering', percent: Math.max(0, Math.min(99, time / 1_000_000 / duration * 100)), message: 'Combining approved clips offline.' })
+        if (Number.isFinite(time) && duration > 0) progress({ projectId, stage: 'rendering', percent: Math.max(0, Math.min(99, time / 1_000_000 / duration * 100)), message: 'Exporting the approved Reel.' })
         if (entries.progress === 'end') progress({ projectId, stage: 'rendering', percent: 100, message: 'Encoding finished; validating the MP4.' })
       })
       child.stderr.on('data', data => { if (stderr.length < 8000) stderr += String(data) })

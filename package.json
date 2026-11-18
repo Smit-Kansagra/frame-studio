@@ -1,6 +1,6 @@
 {
   "name": "frame-studio",
-  "version": "0.13.0-preview.71",
+  "version": "0.13.0-preview.73",
   "private": true,
   "description": "A personal Windows studio for product photos, posts, and reels.",
   "type": "module",

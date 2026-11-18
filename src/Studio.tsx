@@ -85,13 +85,11 @@ function PromptField({ label, value, onChange, rows = 4 }: { label: string; valu
   return <div className="story-prompt-field"><label>{label}<textarea ref={ref} rows={rows} maxLength={20000} value={value} onChange={event => onChange(event.target.value)} /></label><details className="placeholder-menu"><summary><Icon name="plus" size={14} /> Insert placeholder</summary><div>{placeholders.map(token => <button type="button" key={token} onClick={() => insert(token)}><code>{`{{${token}}}`}</code><span>{token.replaceAll('_', ' ')}</span></button>)}</div></details></div>
 }
 
-function GenerationPanel({ project: initialProject, scene: initialScene, prompt: _prompt, onGoExport }: { project: ProjectInfo; scene?: ProjectScene; prompt: string; onGoExport: () => void }) {
+function GenerationPanel({ project, scene: initialScene }: { project: ProjectInfo; scene?: ProjectScene }) {
   const api = window.frameStudio
-  const [project, setProject] = useState(initialProject)
   const singleReel = isSingleReel(project)
   const [attempts, setAttempts] = useState<import('../electron/contracts.cjs').GenerationAttempt[]>([])
   const [reviews, setReviews] = useState<import('../electron/contracts.cjs').SceneReview[]>([])
-  const [exportPlan, setExportPlan] = useState<import('../electron/contracts.cjs').ExportPlan | null>(null)
   const [selectedSceneId, setSelectedSceneId] = useState(initialScene?.id ?? (project.outputType === 'post' ? 'post' : project.storyboard.scenes[0]?.id ?? ''))
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('')
   const [flowState, setFlowState] = useState('not-connected')
@@ -104,7 +102,6 @@ function GenerationPanel({ project: initialProject, scene: initialScene, prompt:
   const [recoveryUrl, setRecoveryUrl] = useState('')
   const [promptPreviewOpen,setPromptPreviewOpen]=useState(false)
   const submitting=useRef(false)
-  const [correctedPrompt, setCorrectedPrompt] = useState(initialScene?.prompt ?? '')
   const [compareAttemptId, setCompareAttemptId] = useState('')
   const [selectedVersionId, setSelectedVersionId] = useState('')
   const [markAttempt,setMarkAttempt]=useState<string>()
@@ -168,8 +165,6 @@ function GenerationPanel({ project: initialProject, scene: initialScene, prompt:
   }
   useEffect(() => { refresh(); const timer = window.setInterval(refresh, 1000); return () => window.clearInterval(timer) }, [project.id])
   useEffect(() => { setSelectedVersionId('') }, [sceneId, sceneReview?.selectedAttemptId])
-  const exportSignature = `${attempts.map(item => `${item.id}:${item.state}`).join(',')}|${reviews.map(item => `${item.sceneId}:${item.selectedAttemptId}:${item.status}`).join(',')}`
-  useEffect(() => { void window.frameStudio?.exports?.inspect(project.id).then(result => { if (result.ok) setExportPlan(result.value) }) }, [project.id, exportSignature])
   const run = async <T,>(operation: () => Promise<import('../electron/contracts.cjs').AppResult<T>>, successMessage?: string): Promise<T | null> => {
     setBusy(true); setError(''); setNotice(''); setRequestError('')
     try { const result = await operation(); if (!result.ok) throw new Error(result.error.message); if (successMessage) setNotice(successMessage); else if (result.value && typeof result.value === 'object' && 'state' in result.value) setNotice(`Attempt ${String(result.value.state).replaceAll('-', ' ')} and saved locally.`); refresh(); return result.value }
@@ -252,12 +247,6 @@ function GenerationPanel({ project: initialProject, scene: initialScene, prompt:
       canvas.toBlob(blob => { if (!blob) { setError('This frame could not be extracted.'); return }; const url = URL.createObjectURL(blob), anchor = document.createElement('a'); anchor.href = url; anchor.download = `frame-studio-${selectedAttempt?.id ?? 'frame'}-frame.png`; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 30000); setNotice('Frame saved as a PNG. Attach it manually only if Flow exposes a suitable reference control.') }, 'image/png')
     } catch { setError('Frame extraction is unavailable for this media source. The original clip remains unchanged.') }
   }
-  const saveCorrection = () => {
-    if (!scene || correctedPrompt.trim() === scene.prompt) return
-    const storyboard = { ...project.storyboard, scenes: project.storyboard.scenes.map(item => item.id === scene.id ? { ...item, prompt: correctedPrompt } : item) }
-    void run(() => api!.projects.save({ id: project.id, expectedRevision: project.revision, name: project.name, productId: project.productId, themeId: project.themeId, characterId: project.characterId, outputType: project.outputType, preset: project.preset, duration: project.duration, storyboard }), 'Prompt correction saved. The previous attempts are preserved; prepare a new attempt when ready.')
-      .then(value => { if (value && typeof value === 'object' && 'storyboard' in value) { setProject(value as ProjectInfo); setCorrectedPrompt((value as ProjectInfo).storyboard.scenes.find(item => item.id === scene.id)?.prompt ?? correctedPrompt) } })
-  }
   const statusLabel = (state: string, attemptId?: string) => {
     const job = flowJobs.find(item => item.attemptId === attemptId)
     if (state === 'submission-uncertain' && job?.submissionAcknowledged) {
@@ -306,8 +295,8 @@ function GenerationPanel({ project: initialProject, scene: initialScene, prompt:
       const status=changes?'changing':approved?'approved':'pending',label=changes?'Changes in progress':approved?'Approved':'Awaiting review'
       return <div key={item.id} className="product-review-item"><button type="button" className={`review-scene-card product-review-card status-${status} ${sceneId===item.id?'selected':''}`} aria-label={`Product ${item.index+1}, ${label}`} aria-pressed={sceneId===item.id} onClick={()=>selectProduct(item.id)}><strong>Product {item.index+1}</strong><span className="product-review-line" aria-hidden="true"/></button>{failedJob&&<button type="button" className="product-retry-button" aria-label={`Retry Product ${item.index+1}`} title={failedJob.retryQueued?'Retry queued':attempts.find(a=>a.id===failedJob.attemptId)?.state==='failed'?(failedJob.generationFailed?'Retry generation':'Resume request'):'Check existing result'} disabled={retrying.has(failedJob.attemptId)||failedJob.retryQueued} onClick={()=>void retryGeneration(failedJob.attemptId)}><Icon name="refresh" size={15}/></button>}</div>
     })}</div>}
-    {project.outputType === 'reel' && !singleReel && <div className="review-scene-strip" aria-label="Scene review strip">{project.storyboard.scenes.map((item, index) => { const count = attempts.filter(attempt => attempt.sceneId === item.id).length, state = reviews.find(review => review.sceneId === item.id)?.status ?? (count ? 'pending' : 'not-started'); return <button type="button" key={item.id} className={`review-scene-card ${selectedSceneId === item.id ? 'selected' : ''}`} aria-pressed={selectedSceneId === item.id} onClick={() => { setSelectedSceneId(item.id); setCorrectedPrompt(item.prompt) }}><span>Scene {index + 1}</span><strong>{item.name}</strong><small>{count} attempt{count === 1 ? '' : 's'} · {state.replaceAll('-', ' ')}</small></button> })}</div>}
-    {project.outputType === 'reel' && !singleReel && <label className="generation-scene-select">Scene to prepare<select value={selectedSceneId} onChange={event => { const next = project.storyboard.scenes.find(item => item.id === event.target.value); setSelectedSceneId(event.target.value); setCorrectedPrompt(next?.prompt ?? '') }}>{project.storyboard.scenes.map((item, index) => <option key={item.id} value={item.id}>Scene {index + 1}: {item.name} · source {item.sourceDuration}s</option>)}</select></label>}
+    {project.outputType === 'reel' && !singleReel && <div className="review-scene-strip" aria-label="Scene review strip">{project.storyboard.scenes.map((item, index) => { const count = attempts.filter(attempt => attempt.sceneId === item.id).length, state = reviews.find(review => review.sceneId === item.id)?.status ?? (count ? 'pending' : 'not-started'); return <button type="button" key={item.id} className={`review-scene-card ${selectedSceneId === item.id ? 'selected' : ''}`} aria-pressed={selectedSceneId === item.id} onClick={() => setSelectedSceneId(item.id)}><span>Scene {index + 1}</span><strong>{item.name}</strong><small>{count} attempt{count === 1 ? '' : 's'} · {state.replaceAll('-', ' ')}</small></button> })}</div>}
+    {project.outputType === 'reel' && !singleReel && <label className="generation-scene-select">Scene to prepare<select value={selectedSceneId} onChange={event => setSelectedSceneId(event.target.value)}>{project.storyboard.scenes.map((item, index) => <option key={item.id} value={item.id}>Scene {index + 1}: {item.name} · source {item.sourceDuration}s</option>)}</select></label>}
     {selectedAttempt && <section className="clip-review-player">
       <div className="scene-preview-heading"><h4>{project.outputType === 'post' ? `Product ${(selectedPost?.index ?? 0) + 1}` : 'Selected clip'} · attempt {sceneAttempts.findIndex(item => item.id === selectedAttempt.id) + 1}</h4>{sceneAttempts.length > 1 && <label>Compare attempt<select value={compareAttemptId} onChange={event => setCompareAttemptId(event.target.value)}><option value="">Choose another attempt</option>{sceneAttempts.filter(item => item.id !== selectedAttempt.id).map(item => <option value={item.id} key={item.id}>Attempt {sceneAttempts.indexOf(item) + 1}</option>)}</select></label>}</div>
       {sceneAttempts.length > 1 && <label className="review-version-select">Review version<select aria-label="Review version" value={selectedAttempt.id} onChange={event => { setSelectedVersionId(event.target.value); setCompareAttemptId('') }}>{sceneAttempts.map((item,index) => <option value={item.id} key={item.id}>Version {sceneAttempts.length-index}{item.id === sceneReview?.selectedAttemptId ? ' · selected' : ''}</option>)}</select></label>}
@@ -327,13 +316,12 @@ function GenerationPanel({ project: initialProject, scene: initialScene, prompt:
         <button type="button" className="button button-secondary" disabled={busy||!!sceneActive} onClick={()=>void repairLogo(selectedAttempt.id)}>Need change in logo</button>
       </>:<><button type="button" className="button button-primary" disabled={busy || flowJobs.some(job => job.attemptId === selectedAttempt.id && job.reelCleanupPending)} onClick={()=>void saveReview('approved')}>Approve selected attempt</button><button type="button" className="button button-secondary" disabled={busy} onClick={()=>void saveReview('needs-changes')}>Needs changes</button></>}</div></div>
       {project.outputType==='reel'&&sceneReview?.selectedAttemptId === selectedAttempt.id && <span className={`generation-state state-${sceneReview.status}`}>{sceneReview.status.replaceAll('-', ' ')}</span>}
-      {scene && <><label className="review-correction">Prompt correction for the next attempt<textarea maxLength={20000} value={correctedPrompt} onChange={event => setCorrectedPrompt(event.target.value)} /></label><button type="button" className="button button-secondary button-small" disabled={busy || correctedPrompt.trim() === scene.prompt} onClick={saveCorrection}>Save prompt correction</button></>}
       </>:<div className="clip-cleanup-placeholder" role="status"><strong>{selectedLogo?.phase==='failed'?'Logo repair needs attention':'Cleaning image locally'}</strong><span>{selectedLogo?.percent??0}%</span><progress max={100} value={Math.min(99,selectedLogo?.percent??0)} aria-label="Selected product cleanup progress"/>{selectedLogo?.phase==='failed'&&<><p>{selectedLogo.message}</p><button type="button" className="button button-secondary" onClick={()=>void cleanup.retry(selectedAttempt.id).catch(()=>{})}>Retry logo repair</button></>}</div>}
     </section>}
     {preview.errors.length > 0 && <div className="prompt-validation-error" role="alert">{preview.errors.map(issue => <p key={issue}>{issue}</p>)}</div>}
     {preview.warnings.map(warning => <div className="prompt-validation-warning" key={warning}>{warning}</div>)}
 
-    <details className="generation-reference-list"><summary>Reference files</summary>{attemptReferences.length ? <ul>{attemptReferences.map(reference => <li key={reference.id}>{reference.name}</li>)}</ul> : <p>No project references were found.</p>}</details>
+    {(project.outputType === 'post' || !selectedAttempt || !!sceneActive) && <><details className="generation-reference-list"><summary>Reference files</summary>{attemptReferences.length ? <ul>{attemptReferences.map(reference => <li key={reference.id}>{reference.name}</li>)}</ul> : <p>No project references were found.</p>}</details>
     <details className="flow-manual-fallback"><summary>Manual fallback / reconcile an old request</summary><p>Use only if automatic generation cannot continue. An uncertain request may already have used credits.</p>
     <div className="generation-controls">
       {!sceneActive ? <button className="button button-primary" disabled={busy || !!active || automaticRunning || !!preview.errors.length || preview.references.some(reference => !reference.available) || (project.outputType === 'reel' && !scene)} onClick={() => run(async () => { await persistChanges(); return api!.generations.prepare(project.id, sceneId) })}>Prepare generation request</button> : <>
@@ -344,8 +332,7 @@ function GenerationPanel({ project: initialProject, scene: initialScene, prompt:
       </>}
       {flowState === 'offline' && <span className="generation-offline">Offline · queued work is kept locally.</span>}
     </div>
-    </details>
-    {project.outputType === 'reel' && <div className="clips-combine-entry"><div><strong>Offline finish</strong><span>{exportPlan?.canExport ? 'All scenes are approved and local media tools are ready. Set trims and order in Export.' : exportPlan?.reasons[0] ?? 'Checking approved clips and local media tools…'}</span></div><button type="button" className="button button-primary" disabled={!exportPlan?.canExport || busy} onClick={onGoExport}>Combine approved clips</button></div>}
+    </details></>}
     {error && <p className="product-message product-error" role="alert">{error}</p>}{notice && <p className="product-notice" role="status">{notice}</p>}
     {cleanup.error&&<p className="product-message product-error" role="alert">{cleanup.error}</p>}
     {markAttempt&&<LogoRepairDialog attemptId={markAttempt} onClose={()=>setMarkAttempt(undefined)} onRepair={area=>{const id=markAttempt;setMarkAttempt(undefined);void cleanup.retry(id,area).catch(()=>{})}}/>}
@@ -357,9 +344,6 @@ function ExportPanel({ project, onBack }: { project: ProjectInfo; onBack: () => 
   const api = window.frameStudio?.exports ? window.frameStudio : undefined
   const [plan, setPlan] = useState<import('../electron/contracts.cjs').ExportPlan | null>(null)
   const [postSceneId, setPostSceneId] = useState('post')
-  const [order, setOrder] = useState<string[]>([]), [trims, setTrims] = useState<Record<string, { inPoint: number; outPoint: number }>>({})
-  const fit = 'crop' as const
-  const [muteAll, setMuteAll] = useState(false)
   const [progress, setProgress] = useState<import('../electron/contracts.cjs').ExportProgress | null>(null)
   const [busy, setBusy] = useState(false), [loading, setLoading] = useState(true), [error, setError] = useState(''), [notice, setNotice] = useState(''), [latest, setLatest] = useState<import('../electron/contracts.cjs').ExportRecord | null>(null)
   const [batchResult,setBatchResult]=useState<import('../electron/contracts.cjs').PostBatchExport|null>(null)
@@ -370,20 +354,16 @@ function ExportPanel({ project, onBack }: { project: ProjectInfo; onBack: () => 
       const response = await api.exports.inspect(project.id)
       if (!response.ok) throw new Error(response.error.message)
       setPlan(response.value); setLatest(response.value.lastExport)
-      if (!order.length) setOrder(response.value.scenes.map(scene => scene.sceneId))
-      setTrims(previous => Object.fromEntries(response.value.scenes.map(scene => [scene.sceneId, previous[scene.sceneId] ?? { inPoint: 0, outPoint: scene.duration ?? 0 }])))
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Export readiness could not be checked.') }
     finally { setLoading(false) }
   }
   useEffect(() => { void refresh() }, [project.id])
   useEffect(() => api?.exports.onProgress(value => { if (value.projectId === project.id) setProgress(value) }), [api, project.id])
-  const total = order.reduce((sum, id) => { const trim = trims[id]; return sum + (trim ? trim.outPoint - trim.inPoint : 0) }, 0)
-  const trimError = project.outputType === 'reel' && plan?.targetDuration != null && Math.abs(total - plan.targetDuration) > 1 / 30 ? `Selected trims total ${total.toFixed(2)}s; match the ${plan.targetDuration}s target within one 30 fps frame.` : ''
   const start = async () => {
     if (!api || !plan || (project.outputType==='post'?singleReasons:reasons).length) return
     setBusy(true); setError(''); setNotice('')
     try {
-      const settings: import('../electron/contracts.cjs').ExportSettings = { order: project.outputType === 'reel' ? order : [], trims: project.outputType === 'reel' ? order.map(sceneId => ({ sceneId, ...trims[sceneId] })) : [], fit, muteAll, ...(project.outputType === 'post' ? { postSceneId } : {}) }
+      const settings: import('../electron/contracts.cjs').ExportSettings = { order: [], trims: [], fit: 'crop', muteAll: false, ...(project.outputType === 'post' ? { postSceneId } : {}) }
       const result = await api.exports.start(project.id, settings)
       if (!result.ok) throw new Error(result.error.message)
       if (!result.value) { setNotice('Export was cancelled in the Save dialog.'); return }
@@ -406,42 +386,21 @@ function ExportPanel({ project, onBack }: { project: ProjectInfo; onBack: () => 
     finally{setBusy(false);setProgress(null)}
   }
   const cancel = async () => { if (!api) return; const result = await api.exports.cancel(project.id); if (!result.ok) setError(result.error.message); else setNotice('Cancel requested. Cleaning up the partial export.') }
-  const updateTrim = (sceneId: string, key: 'inPoint' | 'outPoint', value: number) => setTrims(previous => ({ ...previous, [sceneId]: { ...previous[sceneId], [key]: value } }))
-  const move = async (index: number, direction: -1 | 1) => {
-    const target = index + direction
-    if (target < 0 || target >= order.length || !plan) return
-    const next = [...order]; [next[index], next[target]] = [next[target], next[index]]
-    const movedContinuations = next.filter((id, position) => {
-      const scene = project.storyboard.scenes.find(item => item.id === id)
-      return scene?.relationship === 'continue' && project.storyboard.scenes.findIndex(item => item.id === id) !== position
-    })
-    if (movedContinuations.length) {
-      if (!window.confirm('Reordering a continuation changes which previous scene it follows. Mark those scene reviews for recheck?')) return
-      for (const sceneId of movedContinuations) {
-        const selected = plan.scenes.find(item => item.sceneId === sceneId)?.attemptId
-        if (selected) { const result = await window.frameStudio!.generations.review(project.id, sceneId, selected, 'pending', 'Sequence reordered for export; confirm visual continuity again.'); if (!result.ok) { setError(result.error.message); return } }
-      }
-      setNotice('Continuity review reset for the reordered scene(s). Re-approve them in Clips before exporting.')
-      await refresh()
-    }
-    setOrder(next)
-  }
+  const selectedReel = project.outputType === 'reel' && plan?.scenes.length === 1 ? plan.scenes[0] : undefined
   const selectedPost = plan?.scenes.find(scene => scene.sceneId === postSceneId)
   const readyPosts=plan?.scenes.filter(scene=>scene.reviewStatus==='approved'&&scene.logoReviewStatus==='approved'&&scene.attemptId&&!scene.issue&&scene.width)??[]
   const singleReasons=selectedPost?.reviewStatus==='approved'&&selectedPost.logoReviewStatus==='approved'&&selectedPost.attemptId&&!selectedPost.issue&&selectedPost.width?[]:[selectedPost?.issue??'Approve the selected image in Clips first.']
   const reasons = project.outputType === 'post'
     ? readyPosts.length ? [] : ['Approve images in Clips before exporting.']
-    : [...(plan?.reasons ?? []), ...(trimError ? [trimError] : [])]
+    : (plan?.reasons ?? [])
   return <section className="export-panel">
-    <div className="generation-heading"><span className="eyebrow">STEP 4 OF 4 · LOCAL EXPORT</span><h3>{project.outputType === 'reel' ? 'Combine approved clips' : 'Export your Post images'}</h3><p>{project.outputType==='post'?'Save all approved images together. Choose a folder once; images are named Image 1.png, Image 2.png… in product order.':'Rendering stays on this computer. Flow is not contacted. Source attempts are preserved.'}</p></div>
+    <div className="generation-heading"><span className="eyebrow">STEP 4 OF 4 · LOCAL EXPORT</span><h3>{project.outputType === 'reel' ? 'Export your Reel' : 'Export your Post images'}</h3><p>{project.outputType==='post'?'Save all approved images together. Choose a folder once; images are named Image 1.png, Image 2.png… in product order.':'Approve your Reel in Clips, then choose where to save the MP4.'}</p></div>
     {loading && <p className="product-message" role="status">Checking local files, review decisions, media tools, and export readiness…</p>}
-    {!loading && plan && <><div className="generation-safety-note"><strong>{project.outputType === 'reel' ? plan.toolMessage : 'Post image export works offline without FFmpeg.'}</strong><span>Output: {plan.width} × {plan.height}{project.outputType === 'reel' ? ` · target ${plan.targetDuration}s · 30 fps` : ''}. {plan.upscaledSources ? '1080p export — contains upscaled sources.' : ''}</span></div>
-      {project.outputType === 'reel' ? <><div className="export-fit"><span>Theme dimensions · automatic crop</span><label className="export-mute"><input type="checkbox" checked={muteAll} onChange={event => setMuteAll(event.target.checked)} />Mute all source audio</label><strong>Trim total: {total.toFixed(2)}s / {plan.targetDuration}s</strong></div>
-        <ol className="export-scene-list">{order.map((sceneId, index) => { const scene = plan.scenes.find(item => item.sceneId === sceneId)!; const trim = trims[sceneId] ?? { inPoint: 0, outPoint: scene.duration ?? 0 }; const originalIndex = project.storyboard.scenes.findIndex(item => item.id === sceneId); return <li key={sceneId}><div className="generation-attempt-head"><strong>{index + 1}. {scene.name}</strong><span className={`generation-state state-${scene.reviewStatus}`}>{scene.reviewStatus.replaceAll('-', ' ')}</span></div>{scene.duration == null ? <p>{scene.issue ?? 'Clip metadata unavailable. Install FFmpeg/FFprobe to inspect this source.'}</p> : <><p>{scene.width} × {scene.height} · {scene.duration.toFixed(2)}s · {scene.hasAudio ? 'audio' : 'silent audio will be added'}</p><div className="export-trim-fields"><label>In (s)<input type="number" min="0" max={scene.duration} step="0.01" value={trim.inPoint} onChange={event => updateTrim(sceneId, 'inPoint', event.target.valueAsNumber)} /></label><label>Out (s)<input type="number" min="0" max={scene.duration} step="0.01" value={trim.outPoint} onChange={event => updateTrim(sceneId, 'outPoint', event.target.valueAsNumber)} /></label><span>{Math.max(0, trim.outPoint - trim.inPoint).toFixed(2)}s included</span></div></>}<div className="scene-order-actions"><button type="button" aria-label={`Move ${scene.name} earlier`} disabled={index === 0 || busy} onClick={() => void move(index, -1)}>↑</button><button type="button" aria-label={`Move ${scene.name} later`} disabled={index === order.length - 1 || busy} onClick={() => void move(index, 1)}>↓</button></div>{originalIndex !== index && <small>Order changed · review continuity before export.</small>}</li> })}</ol></> : <div className="export-fit"><span>Theme dimensions · automatic crop</span><p>No video combine action is available for Post projects.</p></div>}
+    {!loading && plan && <><div className="generation-safety-note"><strong>{project.outputType === 'reel' ? 'MP4 video' : 'Post image export works offline without FFmpeg.'}</strong><span>{selectedReel?.width && selectedReel.height ? `${selectedReel.width} × ${selectedReel.height} · ${selectedReel.duration?.toFixed(2)}s` : `${plan.width} × ${plan.height}`}</span></div>
       {project.outputType === 'post' && <><p>{readyPosts.length} / {plan.scenes.length} images ready for bulk export. Images awaiting either approval are skipped.</p><details><summary>Export just one image</summary><label className="generation-scene-select">Product image to export<select value={postSceneId} disabled={busy} onChange={event => setPostSceneId(event.target.value)}>{plan.scenes.map(scene => <option value={scene.sceneId} key={scene.sceneId}>{scene.name} · {scene.reviewStatus.replaceAll('-', ' ')} · logo {scene.logoReviewStatus??'pending'}</option>)}</select></label><button type="button" className="button button-secondary" disabled={busy||singleReasons.length>0} onClick={()=>void start()}>Export selected image</button></details></>}
       {reasons.length > 0 && <div className="prompt-validation-warning" role="status"><strong>Export unavailable:</strong> {reasons.join(' ')}</div>}
       {progress && <div className="export-progress" role="status"><span>{progress.message}</span>{progress.percent == null ? <progress /> : <progress max="100" value={progress.percent} />}<span>{progress.percent == null ? 'Working…' : `${Math.round(progress.percent)}%`}</span><button type="button" className="button button-secondary button-small" onClick={() => void cancel()}>Cancel export</button></div>}
-      <div className="project-savebar"><div><strong>{reasons.length ? 'Review the requirements above' : 'Ready to export locally'}</strong><span>{project.outputType === 'reel' ? 'Original clips are never modified.' : 'Each export uses a new folder, so existing images are preserved.'}</span></div><button type="button" className="button button-primary" disabled={busy || loading || reasons.length > 0} onClick={() => void (project.outputType==='post'?startAll():start())}>{busy ? 'Exporting…' : project.outputType === 'reel' ? 'Combine approved clips' : `Export ${readyPosts.length} approved image${readyPosts.length===1?'':'s'}`}</button></div>
+      <div className="project-savebar"><div><strong>{reasons.length ? 'Review the requirements above' : 'Ready to export locally'}</strong><span>{project.outputType === 'reel' ? 'Original clips are never modified.' : 'Each export uses a new folder, so existing images are preserved.'}</span></div><button type="button" className="button button-primary" disabled={busy || loading || reasons.length > 0} onClick={() => void (project.outputType==='post'?startAll():start())}>{busy ? 'Exporting…' : project.outputType === 'reel' ? 'Export approved Reel' : `Export ${readyPosts.length} approved image${readyPosts.length===1?'':'s'}`}</button></div>
       {batchResult&&<section className="export-result"><h4>{batchResult.files.length} images exported</h4><p>{batchResult.folder}</p><p>{batchResult.files.map((_,index)=>`Image ${index+1}.png`).join(' · ')}</p><button type="button" className="button button-secondary" onClick={()=>void api!.exports.openFolder(batchResult.files[0].id)}>Open exported images folder</button></section>}
       {latest && <section className="export-result"><h4>Last validated export</h4>{latest.outputType === 'reel' ? <video src={`frame-media://export/${latest.id}`} controls preload="metadata" aria-label="Validated finished reel" /> : <img src={`frame-media://export/${latest.id}`} alt="Validated exported Post image" />}<div><span>{latest.width} × {latest.height}{latest.duration == null ? '' : ` · ${latest.duration.toFixed(2)}s`}</span><button type="button" className="button button-secondary button-small" onClick={() => void api!.exports.openFolder(latest.id).then(result => { if (!result.ok) setError(result.error.message) })}>Open folder</button></div></section>}
     </>}
@@ -593,6 +552,6 @@ function ProjectEditor({ id, seedProductId, onDirty, onBusy }: { id?: string; se
       {form.outputType === 'reel' && !storyboard.singleClip && <div className={`timing-status ${Math.abs(sceneTotal - form.duration) <= .005 ? 'timing-valid' : 'timing-invalid'}`} role="status"><div><strong>{Math.abs(sceneTotal - form.duration) <= .005 ? 'Timeline matches target' : 'Timeline durations need attention'}</strong><span>{sceneTotal.toFixed(1)}s of edit time · {form.duration}s final target. Source clip lengths are separate.</span></div>{Math.abs(sceneTotal - form.duration) > .005 && <button type="button" className="button button-secondary button-small" onClick={() => change('duration', Number(sceneTotal.toFixed(1)))}>Use timeline total as target</button>}</div>}
       {!storyboard.singleClip && <div className="project-reference-panel"><div><h4>Project references</h4><p>These saved images are references for later submission. Text paths alone do not attach files.</p></div><div className="project-reference-strip">{imageRefs.map(({ photo, group }) => <div className="project-reference" key={photo.id}><Photo photo={photo} name={photo.originalName} /><span>{group} · {photo.originalName}</span>{!photo.available && <small>Unavailable</small>}</div>)}</div></div>}
       {error && <div className="product-message product-error" role="alert">{error}</div>}{notice && <div className="product-notice" role="status">{notice}</div>}<div className="project-savebar"><div><strong>{dirty ? 'Unsaved storyboard changes' : 'Storyboard saved locally'}</strong><span>Prompt preview only · generation is not available here</span></div><button type="button" className="button button-primary" disabled={!canSave || !dirty} onClick={() => void saveCurrent()}>{busy ? 'Saving…' : 'Save storyboard'}</button></div>
-    </section> : step === 'Clips' && saved ? <GenerationPanel project={saved} scene={activeScene} prompt={promptPreview?.text ?? ''} onGoExport={() => setStep('Export')} /> : step === 'Export' && saved ? <ExportPanel project={saved} onBack={() => setStep('Clips')} /> : <section className="project-future"><span className="eyebrow">STEP {(['Setup', 'Storyboard', 'Clips', 'Export'] as Step[]).indexOf(step) + 1} OF 4</span><h3>{step}</h3><p>Export is available for saved projects.</p><button type="button" className="button button-secondary" onClick={() => setStep('Setup')}>Back to setup</button></section>}
+    </section> : step === 'Clips' && saved ? <GenerationPanel project={saved} scene={activeScene} /> : step === 'Export' && saved ? <ExportPanel project={saved} onBack={() => setStep('Clips')} /> : <section className="project-future"><span className="eyebrow">STEP {(['Setup', 'Storyboard', 'Clips', 'Export'] as Step[]).indexOf(step) + 1} OF 4</span><h3>{step}</h3><p>Export is available for saved projects.</p><button type="button" className="button button-secondary" onClick={() => setStep('Setup')}>Back to setup</button></section>}
   </div>
 }
