@@ -3,7 +3,7 @@
 (() => {
   if (globalThis.__frameStudioCompanion) return
   globalThis.__frameStudioCompanion = true
-  const ADAPTER_VERSION = '0.1.6-fast.34'
+  const ADAPTER_VERSION = '0.1.6-fast.35'
   const seen = new Map()
   let prepared = null
   let submission = null
@@ -836,7 +836,7 @@
     return actualRatio
   }
   function videoCard(element) {
-    if (element.querySelector('video') || element.matches('[data-media-type="video"],[data-type="video"]') || element.querySelector('[data-media-type="video"],[data-type="video"]')) return true
+    if (element.querySelector('flow-video-tile,video') || element.matches('[data-media-type="video"],[data-type="video"]') || element.querySelector('[data-media-type="video"],[data-type="video"]')) return true
     const playName = /^(?:play|play video|play clip|preview video|replay|pause|pause video|play_arrow|play_circle|play_circle_filled|play_circle_outline)$/i
     if ([...element.querySelectorAll('button,[role="button"]')].some(button => visible(button) && playName.test(label(button)))) return true
     return [...element.querySelectorAll(glyphSelector)].some(icon => {
@@ -890,10 +890,23 @@
             if (id) break
           }
         }
+        // Flow's video component renders an ID-less thumbnail with an optional
+        // lazy video element. Its grid wrapper exposes the exact display name.
+        // Require a unique video tile, and later verify the full saved prompt.
+        if (!id && element.querySelector('flow-video-tile')) {
+          const title = element.getAttribute('aria-label')
+          if (title && title.length <= 500) {
+            const named = `${nativeTile}[aria-label="${CSS.escape(title)}"]:has(flow-video-tile)`
+            if (document.querySelectorAll(named).length === 1) {
+              identity = named
+              id = `video-title:${location.origin}${location.pathname.replace(/\/$/, '')}:${title}`
+            }
+          }
+        }
         // Include uploaded media in the baseline too. Result ownership is
         // established by its full prompt, not the hover toolbar's aria label.
         if (!id) continue
-        const busy = element.getAttribute('aria-busy') === 'true' || [...element.querySelectorAll('[role="progressbar"],[aria-busy="true"]')].some(visible)
+        const busy = element.getAttribute('aria-busy') === 'true' || [...element.querySelectorAll('flow-pending-tile,flow-error-tile,[role="progressbar"],[aria-busy="true"]')].some(visible)
         // Flow can show a finished video as a loaded poster and play overlay.
         // Playback metadata is lazy and must not gate result collection.
         const posterReady = !!img?.complete && img.naturalWidth > 0
@@ -969,9 +982,10 @@
     try {
       const deadline = Date.now() + 5000
       while (Date.now() < deadline) {
-        const panels = [...document.querySelectorAll('flow-info-panel .prompt-text')].filter(visible)
-        if (panels.length === 1 && compact(panels[0].innerText || panels[0].textContent)) {
-          const prompt = compact(panels[0].innerText || panels[0].textContent)
+        const panels = [...document.querySelectorAll('flow-info-panel')].filter(visible)
+        const promptField = panels.length === 1 ? panels[0].querySelector('flow-expandable-prompt > .expandable-prompt-container > .prompt-text, .expandable-prompt-container > .prompt-text') || panels[0].querySelector('.prompt-text') : null
+        if (promptField && compact(promptField.innerText || promptField.textContent)) {
+          const prompt = compact(promptField.innerText || promptField.textContent)
           resultPrompts.set(key, prompt)
           if (resultPrompts.size > 100) resultPrompts.delete(resultPrompts.keys().next().value)
           return prompt
@@ -1264,7 +1278,7 @@
         catch (error) { if (/^Flow result prompt is not available yet\./.test(error.message)) { missingPrompt++; continue }; throw error }
         if (!prompt) { missingPrompt++; continue }
         if (item.native ? prompt !== compact(payload.prompt) : !prompt.includes(compact(payload.prompt))) { differentPrompt++; continue }
-        if (payload.outputType === 'reel' && item.native && (item.kind !== 'reel' || !item.ready) && !await originalVideoAvailable(item)) continue
+        if (payload.outputType === 'reel' && item.native && (item.kind !== 'reel' || !item.ready || item.id.startsWith('video-title:')) && !await originalVideoAvailable(item)) continue
         results.push({ id: item.id, selector: item.selector, ...(payload.outputType === 'reel' ? { originalVideo: true } : {}) })
       }
       const ready = readyCards.length

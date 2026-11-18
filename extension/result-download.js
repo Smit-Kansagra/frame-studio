@@ -18,11 +18,18 @@ export function matchesOriginalName(filename, title, mediaId) {
   const canonical = value => value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
   if (!match || !canonical(title)) return false
   const stem=canonical(match[1]),full=canonical(title)
+  const titleOnly = mediaId?.startsWith('video-title:')
+  if (titleOnly && !/\.(?:mp4|mov|webm)$/i.test(base)) return false
   if(match[2].length===14)return stem===full
   // Flow truncates long download titles, but retains this selected media's ID.
   // Timestamp-only names still require the complete title above.
-  return /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(mediaId || '') && match[2].toLowerCase()===mediaId.slice(0,8).toLowerCase() &&
-    (stem===full || stem.length>=16 && full.startsWith(stem))
+  const matchingTitle = stem===full || stem.length>=16 && full.startsWith(stem)
+  if (titleOnly) {
+    // The collector verified the unique titled video card and its full prompt.
+    // Native blob downloads expose the title and their media ID in the filename.
+    return matchingTitle
+  }
+  return /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(mediaId || '') && match[2].toLowerCase()===mediaId.slice(0,8).toLowerCase() && matchingTitle
 }
 export async function existingOriginal(api,{projectUrl,mediaId,title}){
   if(!/^[0-9a-f-]{36}$/i.test(mediaId)||typeof api.search!=='function')return
@@ -58,7 +65,10 @@ export async function captureOriginal(api, { projectUrl, mediaId, nonce, title }
     const originOnly = !referrer || referrer === origin || referrer === `${origin}/`
     const namedOriginal = originOnly && matchesOriginalName(item.filename, title, mediaId)
     const recent = Date.parse(item.startTime) >= started - 1000
-    if (!recent || otherMedia || (!sameProject && !identifiesMedia && !namedOriginal) || !safeMediaUrl(item.finalUrl || item.url, origin)) { suggest(); return }
+    const associated = mediaId?.startsWith('video-title:')
+      ? (sameProject || originOnly) && matchesOriginalName(item.filename, title, mediaId)
+      : sameProject || identifiesMedia || namedOriginal
+    if (!recent || otherMedia || !associated || !safeMediaUrl(item.finalUrl || item.url, origin)) { suggest(); return }
     const extension = /\.(png|jpe?g|webp|mp4|mov|webm)$/i.exec(item.filename)?.[1]?.toLowerCase()
     if (!extension) { suggest(); rejectItem(new Error('Flow original download has an unsupported file format.')); return }
     if (captured) { duplicate = true; suggest(); rejectItem(new Error('Multiple Flow downloads were detected. Wait for them to finish, then resume collection.')); return }

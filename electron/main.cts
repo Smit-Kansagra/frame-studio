@@ -31,7 +31,7 @@ if (app.isPackaged && devUrl) throw new Error('A packaged Frame Studio cannot lo
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'frame-studio', privileges: { standard: true, secure: true, supportFetchAPI: true } },
-  { scheme: 'frame-media', privileges: { standard: true, secure: true, supportFetchAPI: true } },
+  { scheme: 'frame-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
 ])
 
 app.setName('Frame Studio')

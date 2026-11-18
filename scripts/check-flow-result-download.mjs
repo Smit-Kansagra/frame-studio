@@ -47,6 +47,20 @@ const blob=await captureOriginal(api,{projectUrl,mediaId,nonce,title},async()=>{
 })
 assert.equal(await blob.run(),7)
 assert.deepEqual(blobSuggestion,[{filename:`Frame Studio/${nonce}.jpg`,conflictAction:'uniquify'}]);blob.dispose()
+const reelTitle = 'Clothing showcase reel generation'
+const reelId = `video-title:${projectUrl}:${reelTitle}`
+const reelName = 'Clothing_showcase_reel_gen…_5fc341fd.mp4'
+let reelSuggestion
+const reel = await captureOriginal(api,{projectUrl,mediaId:reelId,nonce,title:reelTitle},async()=>{
+  const url = 'blob:https://flow.google.com/22222222-2222-4222-8222-222222222222'
+  assert.deepEqual(emit(item({url,filename:reelName,referrer:'https://flow.google.com/project/another'})),[undefined])
+  assert.deepEqual(emit(item({url,filename:'Different_reel_5fc341fd.mp4'})),[undefined])
+  assert.deepEqual(emit(item({url,filename:reelName.replace('.mp4','.jpg')})),[undefined])
+  reelSuggestion = emit(item({url,filename:reelName,referrer:'https://flow.google.com/'}))
+})
+assert.equal(await reel.run(),7)
+assert.deepEqual(reelSuggestion,[{filename:`Frame Studio/${nonce}.mp4`,conflictAction:'uniquify'}])
+reel.dispose()
 let suggested
 const capture=await captureOriginal(api,{projectUrl,mediaId,nonce},async()=>{
   assert.deepEqual(emit(item({url:'https://evil.example/a.jpg',referrer:projectUrl})),[undefined])

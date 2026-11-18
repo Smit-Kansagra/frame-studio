@@ -526,25 +526,29 @@ try {
     const state=await page.evaluate(()=>window.fixture)
     assert.equal(state.originalDownloads,1);assert.equal(state.upscales,0);assert.equal(state.submissions,0)
   })
-  await check('Reel poster inside a boxless grid tile downloads the 720p original through Clips', async page => {
+  await check('Native video thumbnail without a media ID downloads the 720p original through Clips', async page => {
     const prompt = 'Saved reel prompt'
-    const mediaId = 'e7414b4c-d8a0-4afb-b718-dce5267cad07'
+    const title = 'Clothing showcase'
+    const mediaId = `video-title:${url}:${title}`
     const sample = process.argv[3]
     if (sample) await page.route('**/fixture-720p.mp4', route => route.fulfill({ path: path.resolve(sample), contentType: 'video/mp4' }))
-    await page.evaluate(({ prompt, mediaId }) => {
+    await page.evaluate(({ prompt, title }) => {
       const tile = document.createElement('flow-grid-tile-container')
       tile.style.display = 'contents'
+      tile.setAttribute('aria-label', title)
       tile.innerHTML = `
-        <div data-media-id="${mediaId}" style="width:180px;height:320px;background:#555">
+        <flow-video-tile>
+        <div style="width:180px;height:320px;background:#555">
+          <img class="thumbnail" alt="Generated video thumbnail" src="https://lh3.googleusercontent.com/example-thumbnail=w384">
           <svg width="24" height="24" aria-hidden="true"><path d="M6 4L18 12L6 20Z"/></svg>
           <button class="footer-left">Clothing showcase</button>
           <button aria-label="More options">More</button>
-        </div>`
+        </div></flow-video-tile>`
       tile.querySelector('.footer-left').onclick = () => {
         const panel = document.createElement('flow-info-panel')
-        panel.innerHTML = '<button aria-label="Close">Close</button><div class="prompt-text"></div>'
+        panel.innerHTML = '<button aria-label="Close">Close</button><flow-expandable-prompt><div class="expandable-prompt-container"><div class="prompt-text"><span class="prompt-text"></span></div></div></flow-expandable-prompt>'
         panel.querySelector('button').onclick = () => panel.remove()
-        panel.querySelector('.prompt-text').textContent = prompt
+        panel.querySelector('span.prompt-text').textContent = prompt
         document.body.append(panel)
       }
       tile.querySelector('[aria-label="More options"]').onclick = () => {
@@ -560,7 +564,7 @@ try {
             const response = await fetch('fixture-720p.mp4')
             const link = document.createElement('a')
             link.href = URL.createObjectURL(await response.blob())
-            link.download = 'Clothing_showcase_' + mediaId.slice(0,8) + '.mp4'
+            link.download = 'Clothing_showcase_e7414b4c.mp4'
             document.body.append(link)
             link.click()
             link.remove()
@@ -573,7 +577,7 @@ try {
       header.className = 'header-title'
       header.onclick = () => document.querySelector('[role="menu"]')?.remove()
       document.body.append(header, tile)
-    }, { prompt, mediaId })
+    }, { prompt, title })
     const result = await command(page, 'results', {url, prompt, outputType:'reel', baseline:[]})
     assert.equal(result.ok, true, result.error)
     assert.deepEqual(result.value.results.map(item => item.id), [mediaId])
