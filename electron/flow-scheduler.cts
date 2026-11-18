@@ -30,6 +30,7 @@ export class FlowScheduler {
         submit: url => dispatch('submit', () => source.submit(url)),
         results: (url,prompt,kind,baseline) => dispatch('results', () => source.results(url,prompt,kind,baseline)),
         download: (url,result,directory) => dispatch('download', () => source.download(url,result,directory)),
+        collectionStatus: source.collectionStatus,
         close: () => source.close?.() ?? Promise.resolve(),
       }
       runner = new FlowCoordinator(this.workspace, {

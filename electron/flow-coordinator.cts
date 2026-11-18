@@ -9,9 +9,10 @@ import { interruptActivity, planPreparation, recordActivity, referenceLabels } f
 import type { FlowReporter } from './flow-progress.cjs'
 import promptBuilder = require('./storage/prompts.cjs')
 import { postPhotos } from './storage/post-plan.mjs'
+import { isSingleReel } from './storage/reel-plan.mjs'
 const { assemblePrompt } = promptBuilder
 
-export type FlowDriver = Pick<FlowBrowser, 'createProject' | 'submit' | 'results' | 'download'> & { nameProject: (url: string, name: string) => Promise<void>; prepare: (url: string, request: FlowRequest, report?: FlowReporter) => Promise<string[]>; close?: () => Promise<unknown>; exclusive?: <T>(action: () => Promise<T>) => Promise<T>; submission?: (action: () => Promise<void>, attemptId: string) => Promise<void>; capacityAvailable?: () => Promise<boolean>; granularQueue?: boolean }
+export type FlowDriver = Pick<FlowBrowser, 'createProject' | 'submit' | 'results' | 'download'> & { nameProject: (url: string, name: string) => Promise<void>; prepare: (url: string, request: FlowRequest, report?: FlowReporter) => Promise<string[]>; close?: () => Promise<unknown>; exclusive?: <T>(action: () => Promise<T>) => Promise<T>; submission?: (action: () => Promise<void>, attemptId: string) => Promise<void>; capacityAvailable?: () => Promise<boolean>; granularQueue?: boolean; collectionStatus?: () => string }
 const message = (error: unknown) => error instanceof StorageError ? error.message : 'The Flow browser action could not be verified. Check Chrome, then resume the existing job. It will not be submitted again.'
 // Collection can safely observe the existing job again. Ambiguous associations,
 // rejected formats and browser safety warnings still require attention.
@@ -132,6 +133,7 @@ export class FlowCoordinator {
   async start(projectId: string, sceneId: string, outputs: number): Promise<FlowJob> {
     if (!Number.isInteger(outputs) || outputs < 1 || outputs > 4) throw new StorageError('INVALID_REQUEST', 'Choose between 1 and 4 results per generation.')
     const source = await this.workspace(), sourceProject = await source.projects.get(projectId)
+    if (isSingleReel(sourceProject) && outputs !== 1) throw new StorageError('INVALID_REQUEST', 'This reel generates exactly one 15-second clip.')
     if (sourceProject.outputType === 'post' && !(await source.generations.list(projectId)).some(item => item.sceneId === sceneId && item.state === 'ready-for-review')) return this.startPosts(projectId)
     if(sourceProject.outputType==='post'&&(await source.generations.reviews(projectId)).some(review=>review.sceneId===sceneId&&review.status==='needs-changes'&&review.selectedAttemptId&&review.note.trim()))return this.queuePostRevision(source,projectId,sceneId)
     this.claim(projectId)
@@ -249,13 +251,13 @@ export class FlowCoordinator {
     } catch (error) { this.release(); throw error }
   }
   private clearQueuedRetries(ws:Workspace){
-    for(const id of this.preparationRetries){const job=ws.flow.job(id);if(job&&!job.abandoned&&!job.editQueued)ws.flow.saveJob({...job,retryQueued:false,stage:'needs-attention',message:'Retry paused with this project queue. Click Retry generation to restart this product.'})}
+    for(const id of this.preparationRetries){const job=ws.flow.job(id);if(job&&!job.abandoned&&!job.editQueued)ws.flow.saveJob({...job,retryQueued:false,stage:'needs-attention',message:'Resume paused with this project queue. Continue the saved request from its last confirmed step.'})}
     this.preparationRetries.clear()
   }
   private async prepareRetry(ws:Workspace,id:string,batchId?:string):Promise<FlowJob>{
     const job=ws.flow.job(id)!
     await ws.generations.retryPreparation(id,batchId,this.parallelProjects)
-    return ws.flow.saveJob({...job,stage:'preparing',retryQueued:false,generationFailed:false,submissionAcknowledged:undefined,submissionRejected:undefined,submittedAt:undefined,collectionStopped:false,collectionFailures:0,nextCollectionAt:undefined,baseline:[],resultIds:[],imported:{},activity:[],...(batchId?{postBatch:{index:1,total:1,productName:'Retried product',...job.postBatch,id:batchId}}:{}),message:'Retrying this product: uploading its saved references and prompt again.'})
+    return ws.flow.saveJob({...job,stage:'preparing',retryQueued:false,generationFailed:false,submissionAcknowledged:undefined,submissionRejected:undefined,submittedAt:undefined,collectionStopped:false,collectionFailures:0,nextCollectionAt:undefined,baseline:[],resultIds:[],imported:{},resumePreparation:true,...(batchId?{postBatch:{index:1,total:1,productName:'Retried product',...job.postBatch,id:batchId}}:{}),message:'Resuming the saved request from its last confirmed step. Completed uploads are retained.'})
   }
   async retry(attemptId:string):Promise<FlowJob>{
     const ws=await this.workspace(),job=ws.flow.job(attemptId)
@@ -335,6 +337,7 @@ export class FlowCoordinator {
     }
     const update = (changes: Partial<FlowJob>) => { check(); job = ws.flow.saveJob({ ...job, ...changes }) }
     const report: FlowReporter = item => {
+      if (item.state === 'pending' && job.activity?.some(previous => previous.id === item.id && previous.state === 'done')) return
       const activity = recordActivity(job.activity, item)
       if (activity !== job.activity) update({ activity, ...(item.state !== 'pending' ? { message: item.detail } : {}) })
     }
@@ -359,17 +362,34 @@ export class FlowCoordinator {
         report({ id: 'submit', label: 'Submit generation', state: 'pending', detail: 'Generate has not been clicked for this attempt.' })
         report({ id: 'results', label: 'Flow results', state: 'pending', detail: 'No results collected for this attempt.' })
         report({ id: 'local', label: 'Local request', state: 'running', detail: 'Resolving saved reference files and any approved continuation frame.' })
-        const startFrame = continuation ? await ws.exports.continuationFrame(project.id, project.storyboard.scenes[sceneIndex - 1].id) : undefined
-        const files = await Promise.all(attempt.references.map(id => ws.mediaFile(id, 'original')))
+        const savedPreparation = job.preparation?.browser
+        const knownUpload = (name: string | undefined) => !!name && !!savedPreparation?.assets.some(asset => asset.name === name)
+        const savedFrame = savedPreparation?.manifest.find(item => item.kind === 'startFrame')
+        const resumeSource = (name: string) => ws.paths.resolve(`temp/resume-sources/${attempt.id}/${name}`)
+        const startFrame = continuation ? savedFrame && knownUpload(savedFrame.name) ? resumeSource(savedFrame.name) : await ws.exports.continuationFrame(project.id, project.storyboard.scenes[sceneIndex - 1].id) : undefined
+        const referenceManifest = savedPreparation?.manifest.filter(item => item.kind === 'reference')
+        const files = await Promise.all(attempt.references.map(async (id, index) => {
+          try { return isSingleReel(project) && project.snapshot.theme.referenceVideoIds?.includes(id) ? (await ws.themes.videos.file(id)).path : await ws.mediaFile(id, 'original') }
+          catch (error) {
+            const saved = referenceManifest?.[index]
+            if (!saved || !knownUpload(saved.name)) throw error
+            // A confirmed remote upload does not need its local source again.
+            // This metadata path is never read unless a new upload is required.
+            return resumeSource(saved.name)
+          }
+        }))
         if (attempt.revision) files.push(await ws.generations.revisionFile(attempt.id))
         report({ id: 'local', label: 'Local request', state: 'done', detail: `${files.length} saved reference file(s) resolved locally. Upload confirmation is shown separately below.` })
         const submitOnce = async () => {
           check()
           if (this.browser.submission) report({ id: 'browser-queue', label: 'Project browser queue', state: 'done', detail: 'This project is working in its own tab. Other projects upload independently; completed results receive priority within this tab.' })
           if (this.stopping) throw new StorageError('BUSY', 'Frame Studio is closing. This request was not submitted.')
-          const mapping = await this.ensureProject(ws, job.projectId, report)
-          update({ projectUrl: mapping.url! })
-          const baseline = await this.browser.prepare(job.projectUrl, { ...attempt, files, startFrame, referenceLabels: labels, outputs: job.outputs }, report)
+          const existingMapping = ws.flow.project(job.projectId)
+          const alreadyNamed = existingMapping?.url && existingMapping.url === job.projectUrl && job.preparation?.projectName === project.name
+          const mapping = alreadyNamed ? existingMapping : await this.ensureProject(ws, job.projectId, report)
+          if (alreadyNamed) report({ id: 'project-name', label: 'Flow project name', state: 'done', detail: 'Reusing the already named Flow project for this request.' })
+          update({ projectUrl: mapping.url!, preparation: { ...job.preparation, projectName: project.name } })
+          const baseline = await this.browser.prepare(job.projectUrl, { ...attempt, files, startFrame, referenceLabels: labels, outputs: job.outputs, requestId: attempt.id, resumePreparation: job.resumePreparation, checkpoint: job.preparation?.browser, onCheckpoint: browser => update({ preparation: { ...job.preparation, browser } }), ...(isSingleReel(project) ? { videoSettings: { model: 'Omni Flash 1.2' as const, resolution: '720p' as const } } : {}) }, report)
           check()
           if (this.stopping) throw new StorageError('BUSY', 'Frame Studio is closing. This request was not submitted.')
           // A crash between this commit and the click leaves uncertainty, not a retry.
@@ -395,7 +415,9 @@ export class FlowCoordinator {
       const deadline = Date.now() + this.maxWaitMs
       while (!this.stopping && Date.now() < deadline) {
         if (this.scopeProjectId && ws.flow.project(job.projectId)?.url !== job.projectUrl) throw new StorageError('INVALID_REQUEST', 'Flow job association is ambiguous: the saved project URL changed.')
-        const results = await (this.browser.exclusive ? this.browser.exclusive(() => this.browser.results(job.projectUrl, attempt.prompt, attempt.outputType, job.baseline)) : this.browser.results(job.projectUrl, attempt.prompt, attempt.outputType, job.baseline))
+        const references = (job.preparation?.browser?.assets ?? []).flatMap(asset => asset.key?.startsWith('asset:') ? [asset.key.slice(6)] : [])
+        const baseline = [...new Set([...job.baseline, ...references])]
+        const results = await (this.browser.exclusive ? this.browser.exclusive(() => this.browser.results(job.projectUrl, attempt.prompt, attempt.outputType, baseline)) : this.browser.results(job.projectUrl, attempt.prompt, attempt.outputType, baseline))
         check()
         if (!job.submissionAcknowledged) {
           if (results.length) update({ submissionAcknowledged: true, stage: 'waiting', message: 'Matching Flow results confirm this existing request started. Collecting without another Generate click.' })
@@ -419,11 +441,13 @@ export class FlowCoordinator {
             const directory = await ws.paths.directory(`temp/flow/${localId}`)
             const file = await (this.browser.exclusive ? this.browser.exclusive(() => this.browser.download(job.projectUrl, result, directory)) : this.browser.download(job.projectUrl, result, directory))
             check()
-            report({ id: downloadId, label, state: 'running', detail: 'Download complete. Checking the visible Gemini logo locally before applying theme dimensions.' })
+            report({ id: downloadId, label, state: 'running', detail: 'Download complete. Checking the visible Gemini logo locally before saving the project media.' })
             let logoRemoved = false
             const progressId=existing?.id??attempt.id
             if(attempt.outputType==='post')ws.generations.beginLogoCleanup(progressId)
-            const normalized = await ws.exports.normalizeFlowResult(attempt.preset, file, localId, (detail,removed) => {logoRemoved=removed;report({ id: downloadId, label, state: 'running', detail })},(percent,detail)=>{check();ws.generations.logoProgress(progressId,percent,detail)})
+            // Video tools ship with the app; no separate PATH installation is
+            // required for automatic cleanup and local result import.
+            const normalized = await ws.exports.normalizeFlowResult(attempt.preset, file, localId, (detail,removed) => {logoRemoved=removed;report({ id: downloadId, label, state: 'running', detail })},(percent,detail)=>{check();if(attempt.outputType==='post')ws.generations.logoProgress(progressId,percent,detail)})
             check()
             if (localId === attempt.id) await ws.generations.importResult(attempt.id, normalized)
             else await ws.generations.importVariant(attempt.id, localId, normalized)
@@ -431,12 +455,15 @@ export class FlowCoordinator {
             // The final project file is the same file used by the app preview.
             // Originals/normalized temporary files are no longer needed after commit.
             await ws.paths.removeFlowStage(localId).catch(() => {})
-            report({ id: downloadId, label, state: 'done', detail: 'Saved locally at the theme aspect ratio. Automatic crop/resize applied where needed; ready for review.' })
+            report({ id: downloadId, label, state: 'done', detail: attempt.outputType === 'reel' ? logoRemoved ? 'Video saved locally. The detected visible Gemini logo was cleaned across the clip.' : 'Video saved locally. No supported visible Gemini logo was confidently detected; the image content was preserved.' : 'Saved locally at the theme aspect ratio. Automatic crop/resize applied where needed; ready for review.' })
           }
           update({ stage: 'complete', collectionStopped: false, nextCollectionAt: undefined, collectionFailures: 0, message: `${job.outputs} result(s) saved in Final Projects. Approve a result or Regenerate; previous versions are kept.` })
           return
         }
-        report({ id: 'results', label: 'Flow results', state: 'running', detail: `${results.length}/${job.outputs} matching results found. Checking again automatically; no new generation is submitted.` })
+        const diagnostic = this.browser.collectionStatus?.()
+        const waiting = `${results.length}/${job.outputs} matching results found.${diagnostic ? ` ${diagnostic}` : ''} Checking again automatically; no new generation is submitted.`
+        report({ id: 'results', label: 'Flow results', state: 'running', detail: waiting })
+        update({ message: waiting })
         if (mode === 'poll') {
           const limit = collectionDeadline ?? (job.submittedAt ? Date.parse(job.submittedAt) + this.maxWaitMs : deadline)
           if (Date.now() > limit) throw new StorageError('INVALID_REQUEST', 'Flow result collection timed out. Resume pending results to check the same submitted requests without generating again.')

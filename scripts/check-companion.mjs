@@ -57,7 +57,7 @@ try {
     observed?.push(command.action)
     if(command.action==='prepare'){prepareCalls++;if(prepareErrors-->0){client.send(JSON.stringify({type:'reply',id:command.id,projectId:command.projectId,ok:false,error:'Flow did not confirm the scoped editor action.'}));return}}
     let value = null
-    if (command.action === 'inspect') value = { url: flowUrl, title: 'Fixture workspace', ready: true, companionVersion:'0.1.6', adapterVersion:'0.1.6-fast.24' }
+    if (command.action === 'inspect') value = { url: flowUrl, title: 'Fixture workspace', ready: true, companionVersion:'0.1.6', adapterVersion:'0.1.6-fast.32' }
     if (command.action === 'createProject') value = { url: flowUrl }
     if (command.action === 'nameProject') value = { name: command.payload.name }
     if (command.action === 'attach') { assert.equal(command.payload.file.base64, png.toString('base64')); if(onAttach){const callback=onAttach;onAttach=undefined;callback();await new Promise(resolve=>setTimeout(resolve,10))} }

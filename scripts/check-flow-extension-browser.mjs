@@ -9,7 +9,7 @@ const uploadMain=(await readFile('extension/upload-main.js','utf8')).replace('ex
 const editorMain=(await readFile('extension/editor-main.js','utf8')).replaceAll('export ','')
 const browser = await chromium.launch({ channel: 'chrome', headless: true, chromiumSandbox: true, ignoreDefaultArgs: ['--unsafely-disable-devtools-self-xss-warnings'] })
 const url = 'https://flow.google.com/project/extension-regression'
-const fixture = `<!doctype html><style>
+const fixture = `<!doctype html><meta charset="utf-8"><style>
   [hidden]{display:none!important} flow-base-prompt-box{display:block;padding:20px}
   mat-icon{display:inline-block} button{padding:6px} textarea{display:block}
 </style><main><button>Oct 25 - 11:57</button>
@@ -30,10 +30,10 @@ function openPicker(){
  picker.querySelector('#upload').onclick=()=>{
   window.fixture.uploadClicks++;
   setTimeout(()=>{
-   const input=document.createElement('input');input.type='file';input.accept='image/*';input.multiple=true;input.hidden=true;
+   const input=document.createElement('input');input.type='file';input.accept=window.fixture.videoUpload?'video/*':'image/*';input.multiple=true;input.hidden=true;
    input.onchange=()=>{window.fixture.changes++;for(const file of input.files){
     if(window.fixture.uploadingGroup){const group=document.createElement('div');group.setAttribute('role','group');group.setAttribute('aria-label',file.name);group.innerHTML='<span role="progressbar">0%</span>';document.querySelector('#attachments').append(group);setTimeout(()=>group.remove(),250)}
-    const image=document.createElement('img');image.alt=file.name;image.width=16;image.height=16;
+    const image=document.createElement(window.fixture.videoUpload?'video':'img');image.alt=file.name;if(window.fixture.videoUpload)image.setAttribute('aria-label',file.name);image.width=16;image.height=16;
     image.src='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
     if(window.fixture.librarySelection){
      image.alt='';image.src='https://flow-content.google/image/11111111-1111-4111-8111-111111111111?Expires=1';
@@ -64,10 +64,30 @@ summary.onclick=()=>{
  window.fixture.settingsClicks++;
  const panel=document.createElement('section');panel.id='settings';if(!window.fixture.rolelessSettings)panel.setAttribute('role','dialog');
  panel.innerHTML='<button aria-selected="true">Image</button><button>Video</button>'+
- ['16:9','4:3','1:1','3:4','9:16'].map(r=>'<button data-ratio="'+r+'">'+r+'</button>').join('')+
+ ['16:9','4:3','1:1','3:4','9:16'].filter(r=>window.fixture.missingSetting!==r).map(r=>'<button data-ratio="'+r+'">'+r+'</button>').join('')+
  [1,2,3,4].map(n=>'<button data-output="'+n+'">x'+n+'</button>').join('');
  panel.querySelectorAll('[data-ratio]').forEach(button=>button.onclick=()=>window.fixture.selectedRatio=button.dataset.ratio);
  panel.querySelectorAll('[data-output]').forEach(button=>button.onclick=()=>window.fixture.selectedOutputs=Number(button.dataset.output));
+ if(window.fixture.singleReel){
+  const modeButtons=[...panel.querySelectorAll('button')].filter(button=>/^(Image|Video)$/.test(button.textContent));
+  const mode=window.fixture.videoMode?'Video':'Image';
+  for(const button of modeButtons){button.setAttribute('aria-selected',String(button.textContent===mode));button.onclick=()=>{window.fixture.videoMode=button.textContent==='Video';for(const other of modeButtons)other.setAttribute('aria-selected',String(other===button));summary.textContent=window.fixture.videoMode?'Video Omni Flash 1.2':'Image Nano Banana 2.1'}}
+  for(const button of panel.querySelectorAll('[data-ratio]')){button.setAttribute('aria-pressed',String(window.fixture.selectedRatio===button.dataset.ratio));button.onclick=()=>{window.fixture.selectedRatio=button.dataset.ratio;for(const other of panel.querySelectorAll('[data-ratio]'))other.setAttribute('aria-pressed',String(other===button))}}
+  for(const button of panel.querySelectorAll('[data-output]')){button.setAttribute('aria-pressed',String(window.fixture.selectedOutputs===Number(button.dataset.output)));button.onclick=()=>{window.fixture.selectedOutputs=Number(button.dataset.output);for(const other of panel.querySelectorAll('[data-output]'))other.setAttribute('aria-pressed',String(other===button))}}
+  for(const [label,key,options,initial] of [['Model','model',['Omni Flash 1.1','Omni Flash 1.2','Veo 3.1'],'Omni Flash 1.1'],['Resolution','resolution',['360p','720p'],'360p'],['Duration','duration',['8s','15s'],'8s']]){
+   if(label==='Duration'&&window.fixture.omitDuration)continue;
+   if(label==='Duration'&&window.fixture.durationUnits){
+    const input=document.createElement('input');input.type='range';input.setAttribute('aria-label','Duration');
+    const units=window.fixture.durationUnits;input.min=String(3*units);input.max=String((window.fixture.maxDuration||15)*units);input.step=String(units);input.value=String(window.fixture.rawDuration||15*units);
+    if(window.fixture.durationValueText)input.setAttribute('aria-valuetext',String(Number(input.value)/units)+' seconds');
+    input.oninput=()=>{window.fixture.durationWrites=(window.fixture.durationWrites||0)+1;window.fixture.rawDuration=Number(input.value);window.fixture.duration=String(Number(input.value)/units)+'s';if(window.fixture.durationValueText)input.setAttribute('aria-valuetext',String(Number(input.value)/units)+' seconds');summary.textContent='Video · 720p · '+window.fixture.duration+' x1'};
+    panel.append(input);continue;
+   }
+   const select=document.createElement('select');select.setAttribute('aria-label',label);
+   for(const value of options){if(window.fixture.missingSetting===value)continue;const option=document.createElement('option');option.value=value;option.textContent=value;select.append(option)}
+   select.value=window.fixture[key]||initial;select.onchange=()=>window.fixture[key]=select.value;panel.append(select);
+  }
+ }
  document.body.append(panel);summary.setAttribute('aria-expanded','true');
  if(window.fixture.pickerAlongsideSettings)openPicker();
 };
@@ -121,6 +141,72 @@ async function check(name, run) {
 const request = {url,outputType:'post',preset:'post-square',prompt:'Local extension regression prompt.',outputs:1}
 const photo = {name:'local-product.png',type:'image/png',base64:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='}
 try {
+  await check('duration summary confirms selected 15s without rewriting millisecond slider',async page=>{
+    await page.evaluate(()=>{Object.assign(window.fixture,{singleReel:true,videoMode:true,model:'Omni Flash 1.2',resolution:'720p',durationUnits:1000,rawDuration:15000});document.querySelector('#summary').textContent='Video · 720p · 15s x1'})
+    const prepared=await command(page,'prepare',{...request,outputType:'reel',preset:'reel-vertical',sourceDuration:15,videoSettings:{model:'Omni Flash 1.2',resolution:'720p'}})
+    assert.equal(prepared.ok,true,prepared.error)
+    assert.equal(await page.evaluate(()=>window.fixture.durationWrites||0),0)
+    const baseline=await command(page,'baseline',{references:0,startFrame:false});assert.equal(baseline.ok,true,baseline.error)
+    const armed=await command(page,'armSubmit',{});assert.equal(armed.ok,true,armed.error)
+    assert.equal(await page.evaluate(()=>window.fixture.submissions),0)
+  })
+  await check('duration summary confirms 15s when no duration input is exposed',async page=>{
+    await page.evaluate(()=>{Object.assign(window.fixture,{singleReel:true,videoMode:true,model:'Omni Flash 1.2',resolution:'720p',omitDuration:true});document.querySelector('#summary').textContent='Video · 720p · 15s x1'})
+    const prepared=await command(page,'prepare',{...request,outputType:'reel',preset:'reel-vertical',sourceDuration:15,videoSettings:{model:'Omni Flash 1.2',resolution:'720p'}})
+    assert.equal(prepared.ok,true,prepared.error)
+    const baseline=await command(page,'baseline',{references:0,startFrame:false});assert.equal(baseline.ok,true,baseline.error)
+    await page.evaluate(()=>document.querySelector('#summary').textContent='Video · 720p · 8s x1')
+    const blocked=await command(page,'armSubmit',{});assert.equal(blocked.ok,false);assert.match(blocked.error,/15 seconds/)
+    assert.equal(await page.evaluate(()=>window.fixture.submissions),0)
+  })
+  for(const valueText of [false,true])await check('duration slider converts confirmed milliseconds to 15s'+(valueText?' with aria value text':''),async page=>{
+    await page.evaluate(valueText=>{Object.assign(window.fixture,{singleReel:true,videoMode:true,model:'Omni Flash 1.2',resolution:'720p',durationUnits:1000,rawDuration:8000,durationValueText:valueText});document.querySelector('#summary').textContent='Video · 720p · 8s x1'},valueText)
+    const prepared=await command(page,'prepare',{...request,outputType:'reel',preset:'reel-vertical',sourceDuration:15,videoSettings:{model:'Omni Flash 1.2',resolution:'720p'}})
+    assert.equal(prepared.ok,true,prepared.error)
+    assert.equal(await page.evaluate(()=>window.fixture.rawDuration),15000)
+    assert.equal(await page.evaluate(()=>window.fixture.durationWrites),1)
+    const baseline=await command(page,'baseline',{references:0,startFrame:false});assert.equal(baseline.ok,true,baseline.error)
+  })
+  await check('duration slider refuses unavailable 15s and cannot clamp to 10s',async page=>{
+    await page.evaluate(()=>{Object.assign(window.fixture,{singleReel:true,videoMode:true,model:'Omni Flash 1.2',resolution:'720p',durationUnits:1000,rawDuration:8000,maxDuration:10});document.querySelector('#summary').textContent='Video · 720p · 8s x1'})
+    const prepared=await command(page,'prepare',{...request,outputType:'reel',preset:'reel-vertical',sourceDuration:15,videoSettings:{model:'Omni Flash 1.2',resolution:'720p'}})
+    assert.equal(prepared.ok,false);assert.match(prepared.error,/does not offer 15s/)
+    assert.equal(await page.evaluate(()=>window.fixture.durationWrites||0),0)
+    assert.equal(await page.evaluate(()=>window.fixture.submissions),0)
+  })
+  await check('duration summary cannot mistake 115s for 15s',async page=>{
+    await page.evaluate(()=>{Object.assign(window.fixture,{singleReel:true,videoMode:true,model:'Omni Flash 1.2',resolution:'720p',omitDuration:true});document.querySelector('#summary').textContent='Video · 720p · 115s x1'})
+    const prepared=await command(page,'prepare',{...request,outputType:'reel',preset:'reel-vertical',sourceDuration:15,videoSettings:{model:'Omni Flash 1.2',resolution:'720p'}})
+    assert.equal(prepared.ok,false)
+    assert.equal(await page.evaluate(()=>window.fixture.submissions),0)
+  })
+  await check('single reel selects and rechecks Omni 1.2, 720p, 9:16, x1 and 15 seconds', async page => {
+    await page.evaluate(()=>window.fixture.singleReel=true)
+    const settings={...request,outputType:'reel',preset:'reel-vertical',sourceDuration:15,videoSettings:{model:'Omni Flash 1.2',resolution:'720p'}}
+    const prepared=await command(page,'prepare',settings);assert.equal(prepared.ok,true,prepared.error)
+    const selected=await page.evaluate(()=>window.fixture)
+    assert.equal(selected.model,'Omni Flash 1.2');assert.equal(selected.resolution,'720p');assert.equal(selected.duration,'15s');assert.equal(selected.selectedOutputs,1);assert.equal(selected.selectedRatio,'9:16')
+    const baseline=await command(page,'baseline',{references:0,startFrame:false});assert.equal(baseline.ok,true,baseline.error)
+    await page.evaluate(()=>window.fixture.model='Omni Flash 1.1')
+    const blocked=await command(page,'armSubmit',{});assert.equal(blocked.ok,false);assert.match(blocked.error,/Omni Flash 1.2/)
+    assert.equal(await page.evaluate(()=>window.fixture.submissions),0)
+    await page.getByRole('combobox',{name:'Model',exact:true}).selectOption('Omni Flash 1.2')
+    const submitted=await command(page,'submit');assert.equal(submitted.ok,true,submitted.error)
+    assert.equal(await page.evaluate(()=>window.fixture.submissions),1)
+  })
+  for(const unavailable of ['Omni Flash 1.2','720p','15s','9:16'])await check('single reel refuses unavailable '+unavailable,async page=>{
+    await page.evaluate(value=>{window.fixture.singleReel=true;window.fixture.missingSetting=value},unavailable)
+    const prepared=await command(page,'prepare',{...request,outputType:'reel',preset:'reel-vertical',sourceDuration:15,videoSettings:{model:'Omni Flash 1.2',resolution:'720p'}})
+    assert.equal(prepared.ok,false);assert.equal(await page.evaluate(()=>window.fixture.submissions),0)
+  })
+  await check('video reference uses video input and confirms the attachment before submit', async page => {
+    await page.evaluate(()=>window.fixture.videoUpload=true)
+    const prepared=await command(page,'prepare',request);assert.equal(prepared.ok,true,prepared.error)
+    const attached=await command(page,'attach',{kind:'reference',file:{name:'motion.webm',type:'video/webm',base64:'GkXfowAAAAAAAAAAAAAAAAAAAAAAAAAA'}});assert.equal(attached.ok,true,attached.error)
+    assert.equal(await page.locator('#attachments video').count(),1)
+    const baseline=await command(page,'baseline',{references:1,startFrame:false});assert.equal(baseline.ok,true,baseline.error)
+    assert.equal(await page.evaluate(()=>window.fixture.submissions),0)
+  })
   await check('baseline waits for Flow capacity before arming a submission', async page => {
     const ready=await command(page,'prepare',request);assert.equal(ready.ok,true,ready.error)
     await page.evaluate(()=>{const button=document.querySelector('#generate');button.disabled=true;setTimeout(()=>button.disabled=false,350)})

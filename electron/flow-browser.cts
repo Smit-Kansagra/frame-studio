@@ -1,12 +1,12 @@
 import { chromium } from 'playwright-core'
 import type { BrowserContext, Page, Locator } from 'playwright-core'
 import path from 'node:path'
-import type { FlowConnection, GenerationAttempt } from './contracts.cjs'
+import type { FlowConnection, GenerationAttempt, FlowPreparationCheckpoint } from './contracts.cjs'
 import { StorageError } from './storage/errors.cjs'
 
 import { FLOW_HOME, isFlowProject } from './flow-urls.cjs'
 export { FLOW_HOME, isFlowProject } from './flow-urls.cjs'
-export type FlowRequest = Pick<GenerationAttempt, 'outputType' | 'prompt' | 'preset' | 'sourceDuration'> & { files: string[]; outputs: number; startFrame?: string; referenceLabels?: string[] }
+export type FlowRequest = Pick<GenerationAttempt, 'outputType' | 'prompt' | 'preset' | 'sourceDuration'> & { files: string[]; outputs: number; startFrame?: string; referenceLabels?: string[]; requestId?: string; resumePreparation?: boolean; checkpoint?: FlowPreparationCheckpoint; onCheckpoint?: (value: FlowPreparationCheckpoint) => void; videoSettings?: { model: 'Omni Flash 1.2'; resolution: '720p' } }
 export type RemoteResult = { id: string; selector: string }
 function attention(message: string): never { throw new StorageError('INVALID_REQUEST', message) }
 
@@ -110,6 +110,10 @@ export class FlowBrowser {
     const model = page.getByRole('button', { name: /^(?:model|select model|.*nano banana.*|.*veo.*|.*omni.*)$/i }).filter({ visible: true })
     await this.unique(model, 'model selector'); await model.click()
     await this.option(page, request.outputType === 'post' ? /^image$/i : /^video$/i, 'Image/Video mode')
+    if (request.videoSettings) {
+      await this.selectSetting(page, /model/i, request.videoSettings.model, /^(?:Gemini\s+)?Omni\s+(?:Flash\s+1\.2|1\.2\s+Flash)$/i)
+      await this.selectSetting(page, /resolution|quality/i, '720p', /^720\s*p$/i)
+    }
     if (request.outputType === 'reel') await this.option(page, request.startFrame ? /^frames$/i : /^ingredients$/i, request.startFrame ? 'video Frames mode' : 'video Ingredients mode')
     const ratio = ({ 'post-square': '1:1', 'post-portrait': '4:5', 'post-tall': '3:4', 'post-landscape': '1.91:1', 'post-story': '9:16', 'reel-vertical': '9:16', 'reel-landscape': '16:9' })[request.preset]
     await this.selectSetting(page, /aspect ratio|orientation/i, ratio, new RegExp(`^(?:.*\\s)?${ratio}(?:\\s.*)?$`))

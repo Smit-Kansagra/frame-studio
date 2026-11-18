@@ -19,10 +19,12 @@ export function referenceLabels(project: ProjectInfo, ids: string[]): string[] {
     const product = project.snapshot.product.photos.find(photo => photo.id === id)
     const theme = project.snapshot.theme.images.find(photo => photo.id === id)
     const character = project.snapshot.character?.photos.find(photo => photo.id === id)
+    const video = project.snapshot.theme.videos?.find(video => video.id === id)
     if (product) roles.push('Product')
     if (theme) roles.push('Theme')
     if (character) roles.push('Character')
-    return `${roles.join(' / ') || 'Reference'} photo ${index + 1}: ${(product ?? theme ?? character)?.originalName ?? 'Saved reference'}`
+    if (id === project.snapshot.theme.storyboardAssetId) roles.push('Storyboard')
+    return `${roles.join(' / ') || 'Reference'} ${video ? 'video' : 'photo'} ${index + 1}: ${(product ?? theme ?? character ?? video)?.originalName ?? 'Saved reference'}`
   })
 }
 

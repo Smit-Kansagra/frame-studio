@@ -16,13 +16,13 @@ export class FlowState {
       const job = JSON.parse(row.content) as FlowJob
       const attempt = this.db.prepare('SELECT state FROM generation_attempts WHERE id = ?').get(job.attemptId) as { state: string }
       if(job.editQueued&&attempt.state==='queued'&&!job.submittedAt&&!job.submissionAcknowledged){this.saveJob({...job,stage:'preparing',message:'Image changes queued. They resume in this project when Chrome is connected.'});continue}
-      if(job.retryQueued){if(attempt.state==='queued')this.db.prepare("UPDATE generation_attempts SET state='failed' WHERE id=?").run(job.attemptId);this.saveJob({...job,retryQueued:false,stage:'needs-attention',message:'The queued retry was interrupted. Click Retry generation to upload this product again.'});continue}
+      if(job.retryQueued){if(attempt.state==='queued')this.db.prepare("UPDATE generation_attempts SET state='failed' WHERE id=?").run(job.attemptId);this.saveJob({...job,retryQueued:false,stage:'needs-attention',message:'The queued resume was interrupted. Use Resume request to continue its saved preparation checkpoint.'});continue}
       if(attempt.state==='queued'&&job.stage==='needs-attention'&&!job.submittedAt&&!job.submissionAcknowledged)this.db.prepare("UPDATE generation_attempts SET state='failed' WHERE id=?").run(job.attemptId)
       if (['complete', 'needs-attention'].includes(job.stage)) continue
       if (attempt.state === 'ready-for-review') this.saveJob({ ...job, stage: 'complete', message: 'Downloaded results recovered after restart.' })
       else {
         if (attempt.state === 'queued') this.db.prepare("UPDATE generation_attempts SET state = 'failed' WHERE id = ?").run(job.attemptId)
-        this.saveJob({ ...job, activity: interruptActivity(job.activity, 'Interrupted while Frame Studio was closing. Completion of this step was not confirmed.'), stage: 'needs-attention', message: attempt.state === 'queued' ? 'Preparation was interrupted before submission. Generate again when ready; no automatic retry was made.' : 'Interrupted Flow request. Resume result collection to inspect the same job; no automatic resubmission.' })
+        this.saveJob({ ...job, activity: interruptActivity(job.activity, 'Interrupted while Frame Studio was closing. Completion of this step was not confirmed.'), stage: 'needs-attention', message: attempt.state === 'queued' ? 'Preparation was interrupted before submission. Use Resume request to continue its saved checkpoint; completed uploads are retained.' : 'Interrupted Flow request. Resume result collection to inspect the same job; no automatic resubmission.' })
       }
     }
   }

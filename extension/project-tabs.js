@@ -58,6 +58,10 @@ export class ProjectTabs {
     if(creating && record.url) throw new Error('This project already has a Flow URL. Duplicate creation is refused.')
     let tab
     if(Number.isInteger(record.tabId)) { try { tab=await this.api.tabs.get(record.tabId) } catch {} }
+    // The owner may navigate an old project tab while its video is rendering.
+    // Collection reopens only the immutable saved project URL in a fresh tab;
+    // it never changes the owner's tab or repeats preparation/submission.
+    if(tab && !creating && ['results','download'].includes(action) && this.allowed(tab.url) && new URL(tab.url).origin===origin && !sameProject(tab.url,record.url)) tab=undefined
     if(tab) {
       await this.verify(record,creating?undefined:record.url)
     } else {

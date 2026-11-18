@@ -1,6 +1,6 @@
 {
   "name": "frame-studio",
-  "version": "0.13.0-preview.59",
+  "version": "0.13.0-preview.67",
   "private": true,
   "description": "A personal Windows studio for product photos, posts, and reels.",
   "type": "module",
@@ -69,6 +69,16 @@
       "node_modules/onnxruntime-node/**"
     ],
     "extraResources": [
+      {
+        "from": ".verification/ffmpeg-9.0.2-essentials_build/bin",
+        "to": "media-tools",
+        "filter": ["ffmpeg.exe", "ffprobe.exe"]
+      },
+      {
+        "from": "third-party/ffmpeg",
+        "to": "media-tools",
+        "filter": ["*.txt"]
+      },
       {
         "from": "extension",
         "to": "flow-companion",

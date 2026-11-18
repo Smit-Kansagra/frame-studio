@@ -1,8 +1,9 @@
 import type { ProjectInfo, ProjectScene, ThemeReferenceSelection } from '../contracts.cjs'
 import { postPhotos } from './post-plan.mjs'
 import { compositionCompatibleShared } from './theme-references.mjs'
+import { isSingleReel, reelImages, reelSettingsLabel } from './reel-plan.mjs'
 
-export type PromptPreview = { text: string; errors: string[]; warnings: string[]; references: { id: string; name: string; thumbnailUrl: string; available: boolean }[]; selectedReference?: ThemeReferenceSelection }
+export type PromptPreview = { text: string; errors: string[]; warnings: string[]; references: { id: string; name: string; thumbnailUrl: string; available: boolean; mediaType?: 'video' }[]; selectedReference?: ThemeReferenceSelection }
 const ratios: Record<ProjectInfo['preset'], string> = {
   'reel-vertical': '9:16', 'reel-landscape': '16:9', 'post-square': '1:1', 'post-portrait': '4:5', 'post-story': '9:16', 'post-tall': '3:4', 'post-landscape': '1.91:1',
 }
@@ -22,8 +23,11 @@ function personLanguage(text: string): boolean { return /\b(person|people|charac
 export function assemblePrompt(project: ProjectInfo, scene?: ProjectScene, postId = 'post'): PromptPreview {
   const errors: string[] = [], warnings: string[] = []
   const theme = project.snapshot.theme, product = project.snapshot.product, character = project.snapshot.character
+  const singleReel = isSingleReel(project)
+  scene = singleReel ? project.storyboard.scenes[0] : scene
   const posts = postPhotos(project), post = posts.find(item => item.id === postId)
-  const inputPhotos = [...(project.outputType === 'post' ? (post ? [post.product, ...(post.reference ? [post.reference] : [])] : []) : [...product.photos, ...theme.images]), ...(character?.photos ?? [])].filter((photo, index, all) => all.findIndex(item => item.id === photo.id) === index)
+  const inputPhotos = singleReel ? reelImages(project) : [...(project.outputType === 'post' ? (post ? [post.product, ...(post.reference ? [post.reference] : [])] : []) : [...product.photos, ...theme.images]), ...(character?.photos ?? [])].filter((photo, index, all) => all.findIndex(item => item.id === photo.id) === index)
+  if (singleReel && (!theme.storyboardAssetId || !inputPhotos.some(photo => photo.id === theme.storyboardAssetId))) errors.push('Add a storyboard photo to this Reel theme before generating.')
   const inputNumber = (id: string) => inputPhotos.findIndex(photo => photo.id === id) + 1
   if (project.outputType === 'post' && !post) errors.push('Choose a product photo from this saved project.')
   if (post?.instructions && !post.reference) errors.push('The assigned visual reference image is unavailable. Restore it before generating this product.')
@@ -43,6 +47,14 @@ export function assemblePrompt(project: ProjectInfo, scene?: ProjectScene, postI
   const blocks = [`Shared creative direction:\n${project.outputType === 'post' ? compositionCompatibleShared(shared, resolvedComposition) : shared}`]
   const factual = [`Product: ${product.name}`, product.description && `Description: ${product.description}`, product.notes && `Preservation notes: ${product.notes}`].filter(Boolean).join('\n')
   blocks.push(factual)
+  if (singleReel) {
+    blocks.push('Generate exactly one complete 15-second vertical reel. Follow the storyboard photo for the full sequence within this single clip. Do not generate separate clips for individual storyboard panels.')
+    for (const [index, photo] of inputPhotos.entries()) {
+      const roles = [product.photos.some(item => item.id === photo.id) && 'Product: preserve its exact design, colour, shape, material and labels', photo.id === theme.storyboardAssetId && 'Storyboard: follow its visual sequence, framing and action', theme.referenceAssetIds.includes(photo.id) && 'Theme reference: follow its visual style and composition', character?.photos.some(item => item.id === photo.id) && 'Character: preserve this identity and appearance'].filter(Boolean)
+      blocks.push(`Input image ${index + 1}: ${photo.originalName}. ${roles.join('. ')}.`)
+    }
+    for (const id of theme.referenceVideoIds ?? []) blocks.push(`Video reference: ${theme.videos?.find(video => video.id === id)?.originalName ?? 'Saved video'}. Follow its movement, pacing and camera direction while preserving the selected product and character.`)
+  }
   if (post) {
     blocks.push(`Product photo ${number} of ${posts.length}: ${post.product.originalName}. Generate exactly one still image of this product. The first attached image is the product to preserve; retain its design, colour, shape, labels and other defining details. Do not combine different products. Follow the selected composition for any inset or multi-panel layout.`)
     if (post.reference) blocks.push(`Theme reference: ${post.instructions?.name ?? post.reference.originalName}. Input image ${inputNumber(post.reference.id)} is the selected theme reference for layout, pose, framing, background, lighting, and the accessories/text specified in this composition. Follow only this selected reference and its composition instructions. Its selected composition overrides conflicting generic shared layout/accessory/text restrictions. It does not define the product design or the selected character's identity.`)
@@ -58,13 +70,18 @@ export function assemblePrompt(project: ProjectInfo, scene?: ProjectScene, postI
   if (scene) blocks.push(scene.relationship === 'continue'
     ? 'Continuity: Continue the visual continuity of the preceding scene. Preserve the established subject appearance, outfit, product details, and setting where applicable.'
     : 'Continuity: Treat this as a new shot. Follow the saved references and project details without assuming a previous scene.')
-  blocks.push(project.outputType === 'reel' ? `Output: Video · ${ratios[project.preset]} aspect ratio · requested source clip length ${scene?.sourceDuration ?? project.duration}s, subject to available Flow controls. Final timeline target: ${project.duration}s.` : `Output: Still image · ${ratios[project.preset]} aspect ratio.`)
+  blocks.push(singleReel ? `Output: ${reelSettingsLabel}.` : project.outputType === 'reel' ? `Output: Video · ${ratios[project.preset]} aspect ratio · requested source clip length ${scene?.sourceDuration ?? project.duration}s, subject to available Flow controls. Final timeline target: ${project.duration}s.` : `Output: Still image · ${ratios[project.preset]} aspect ratio.`)
   const sourceText = [theme.masterPrompt, composition, scene?.prompt ?? ''].join('\n')
   if (project.outputType === 'reel') {
     const total = project.storyboard.scenes.reduce((sum, item) => sum + item.editDuration, 0)
     if (Math.abs(total - project.duration) > 0.005) errors.push(`Timeline edit durations total ${Number(total.toFixed(3))}s, but the final target is ${project.duration}s. Adjust timeline edit durations or deliberately use their total as the target.`)
   }
   if (!character && personLanguage(sourceText)) warnings.push('Product only is selected, but the theme text mentions a person. Review the wording before using this prompt.')
-  const references = inputPhotos.map(photo => ({ id: photo.id, name: photo.originalName, thumbnailUrl: photo.thumbnailUrl, available: photo.available }))
+  const references: PromptPreview['references'] = inputPhotos.map(photo => ({ id: photo.id, name: photo.originalName, thumbnailUrl: photo.thumbnailUrl, available: photo.available }))
+  if (singleReel) for (const id of theme.referenceVideoIds ?? []) {
+    const video = theme.videos?.find(item => item.id === id)
+    references.push({ id, name: video?.originalName ?? 'Missing video reference', thumbnailUrl: video?.originalUrl ?? '', available: video?.available ?? false, mediaType: 'video' })
+    if (video && video.byteSize > 20 * 1024 * 1024) errors.push(`${video.originalName}: use a reference video under 20 MB for Flow upload.`)
+  }
   return { text: blocks.filter(Boolean).join('\n\n'), errors: [...new Set(errors)], warnings, references, ...(post?.instructions ? { selectedReference: { ...post.instructions, compositionPrompt: resolvedComposition, negativePrompt: selectedNegative, compositionSource: ownComposition ? 'reference' : 'shared' } as ThemeReferenceSelection } : {}) }
 }

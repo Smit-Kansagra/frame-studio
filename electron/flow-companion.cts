@@ -31,6 +31,7 @@ export class FlowCompanion {
   private port = 0
   private pending = new Map<string, Pending>()
   private cancelledScopes = new Set<string>()
+  private resultDetails = new Map<string, string>()
   private pairing?: Promise<CompanionPairing>
   private connection: FlowConnection = { state: 'not-connected', message: 'Pair the Frame Studio companion with one already-signed-in Flow tab in normal Chrome.', pageTitle: null, checkedAt: null }
   constructor(private readonly downloads: string, private readonly nativeSubmit?: (url: string, title: string) => Promise<void>) {}
@@ -121,8 +122,8 @@ export class FlowCompanion {
     try {
       const value = await this.request<{ url: string; title: string; ready: boolean; companionVersion?: string; adapterVersion?: string }>('inspect')
       if (!value || typeof value.url !== 'string' || !allowedFlowPage(value.url) || value.ready !== true) invalid('Selected tab is not a signed-in Flow workspace. Finish sign-in manually and reconnect the companion.')
-      if (!['0.1.6','0.1.7','0.1.8','0.1.9','0.1.10'].includes(value.companionVersion??'')) invalid('Old Flow companion code is still loaded. Use Flow Bridge from this app, reload it in chrome://extensions, refresh the Flow tab, then pair again.')
-      if (value.adapterVersion !== '0.1.6-fast.24') invalid(`Flow tab is running ${value.adapterVersion || 'an older adapter'}. Reload companion 0.1.6-fast.24 in chrome://extensions, refresh the Flow tab, then pair again. The current fixes are not loaded in that tab yet.`)
+      if (!['0.1.6','0.1.7','0.1.8','0.1.9','0.1.10','0.1.11','0.1.12','0.1.13','0.1.14','0.1.15','0.1.16','0.1.17','0.1.18'].includes(value.companionVersion??'')) invalid('Old Flow companion code is still loaded. Use Flow Bridge from this app, reload it in chrome://extensions, refresh the Flow tab, then pair again.')
+      if (value.adapterVersion !== '0.1.6-fast.32') invalid(`Flow tab is running ${value.adapterVersion || 'an older adapter'}. Reload companion 0.1.6-fast.32 in chrome://extensions, refresh the Flow tab, then pair again. The current fixes are not loaded in that tab yet.`)
       this.connection = { state: 'connected', message: `Flow companion ${value.companionVersion} connected to your selected Flow tab. Live generation compatibility still requires verification.`, pageTitle: String(value.title).slice(0, 200), checkedAt: new Date().toISOString() }
     } catch (error) { this.connection = { ...this.connection, state: 'needs-attention', message: error instanceof Error ? error.message : 'Could not verify the selected Flow tab.', checkedAt: new Date().toISOString() } }
     return this.status()
@@ -141,9 +142,9 @@ export class FlowCompanion {
   }
   private async photo(file: string) {
     const info = await lstat(file)
-    if (!info.isFile() || info.isSymbolicLink() || info.size > 20 * 1024 * 1024) invalid('A project reference is not a regular image under 20 MB.')
+    if (!info.isFile() || info.isSymbolicLink() || info.size > 20 * 1024 * 1024) invalid('A project reference must be a regular image or video under 20 MB.')
     const extension = path.extname(file).toLowerCase()
-    const type = ({ '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' } as Record<string, string>)[extension]
+    const type = ({ '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm' } as Record<string, string>)[extension]
     if (!type) invalid('Unsupported project reference type.')
     return { name: path.basename(file), type, base64: (await readFile(file)).toString('base64') }
   }
@@ -155,26 +156,52 @@ export class FlowCompanion {
   }
   async prepare(url: string, request: FlowRequest, report?: FlowReporter, scope?: string, dispatch?: FlowCommandDispatch): Promise<string[]> {
     if (!validProject(url)) invalid('Invalid Flow project URL.')
-    const { files, startFrame, referenceLabels, ...settings } = request
-    report?.({ id: 'prompt-settings', label: 'Flow prompt and settings', state: 'running', detail: `Opening the linked project; applying ${request.outputType === 'post' ? 'image' : 'video'} mode, requested settings and the saved prompt. Photos are not uploaded in this step.` })
-    const preparation = await this.preparationStep<{ sourceRatio?: string; targetRatio?: string; automaticCrop?: boolean }>('prepare', { url, ...settings, continuation: !!startFrame }, scope, dispatch)
+    const { files, startFrame, referenceLabels, checkpoint, onCheckpoint, ...settings } = request
+    const manifest = [...(startFrame ? [{ name: request.checkpoint?.manifest[0]?.name ?? (request.requestId && !request.resumePreparation ? `${request.requestId}-start-frame.png` : path.basename(startFrame)), kind: 'startFrame' as const }] : []), ...files.map((file, index) => {
+      const stored = request.checkpoint?.manifest[index + (startFrame ? 1 : 0)]
+      const parent = path.basename(path.dirname(file)), original = path.basename(file)
+      const name = stored?.name ?? (!request.resumePreparation && /^original\.(?:mp4|mov|webm)$/i.test(original) && /^[0-9a-f-]{36}$/i.test(parent) ? `${parent}${path.extname(file)}` : original)
+      return { name, kind: 'reference' as const }
+    })]
+    if (new Set(manifest.map(item => item.name)).size !== manifest.length) invalid('Reference filenames are not unique. Rename the conflicting reference before resuming; existing uploads were preserved.')
+    const saveCheckpoint = (value?: { checkpoint?: import('./contracts.cjs').FlowPreparationCheckpoint }) => {
+      const saved = value?.checkpoint
+      if (!saved) return
+      if (saved.requestId !== request.requestId || saved.url !== url || saved.prompt !== request.prompt || typeof saved.settingsKey !== 'string' || saved.settingsKey.length > 2000 || (!Array.isArray(saved.manifest) || saved.manifest.length !== manifest.length || saved.manifest.some((item, index) => !item || item.name !== manifest[index]?.name || item.kind !== manifest[index]?.kind)) || !Array.isArray(saved.assets) || saved.assets.length > manifest.length || saved.assets.some(asset => !manifest.some(item => item.name === asset.name && item.kind === asset.kind) || !['uploading','uploaded','attached'].includes(asset.stage) || asset.key !== undefined && !/^asset:[0-9a-f-]{36}$/i.test(asset.key))) invalid('The saved Flow preparation checkpoint does not match this request. Existing uploads were preserved.')
+      onCheckpoint?.(saved)
+    }
+    const initialCheckpoint = checkpoint ?? (request.requestId ? { requestId: request.requestId, url, prompt: request.prompt, settingsKey: JSON.stringify({ outputType: request.outputType, preset: request.preset, sourceDuration: request.sourceDuration ?? null, outputs: request.outputs, continuation: !!startFrame, videoSettings: request.videoSettings ?? null }), manifest, assets: [], attachmentsCleared: !!request.resumePreparation } : undefined)
+    saveCheckpoint({ checkpoint: initialCheckpoint })
+    report?.({ id: 'prompt-settings', label: 'Flow prompt and settings', state: 'running', detail: request.resumePreparation ? 'Restoring the saved preparation and checking its current prompt, settings and attachments.' : 'Opening the linked project and preparing its saved prompt and settings.' })
+    const preparation = await this.preparationStep<{ sourceRatio?: string; targetRatio?: string; automaticCrop?: boolean; checkpoint?: import('./contracts.cjs').FlowPreparationCheckpoint }>('prepare', { url, ...settings, continuation: !!startFrame, checkpoint: initialCheckpoint, manifest }, scope, dispatch)
+    saveCheckpoint(preparation)
     const ratioNote = preparation?.sourceRatio && preparation.targetRatio ? ` Flow source ${preparation.sourceRatio}; theme output ${preparation.targetRatio}.${preparation.automaticCrop ? ' The downloaded result will be cropped automatically to the theme dimensions.' : ''}` : ''
-    report?.({ id: 'prompt-settings', label: 'Flow prompt and settings', state: 'done', detail: `Chrome companion confirmed the saved prompt and settings.${ratioNote}` })
-    if (startFrame) {
-      report?.({ id: 'start-frame', label: 'Previous approved scene: start frame', state: 'running', detail: 'Uploading and waiting for its attachment to appear in the Flow composer.' })
-      await this.preparationStep('attach', { url, kind: 'startFrame', file: await this.photo(startFrame) }, scope, dispatch)
-      report?.({ id: 'start-frame', label: 'Previous approved scene: start frame', state: 'done', detail: 'Companion confirmed the start-frame attachment is visible in Flow.' })
+    report?.({ id: 'prompt-settings', label: 'Flow prompt and settings', state: 'done', detail: `Saved prompt and settings confirmed; completed uploads are retained.${ratioNote}` })
+    const attach = async (file: string, item: typeof manifest[number], id: string, label: string) => {
+      const state: { attached: boolean; known: boolean; checkpoint?: import('./contracts.cjs').FlowPreparationCheckpoint } = request.requestId ? await this.preparationStep('referenceState', { url, requestId: request.requestId, name: item.name, kind: item.kind }, scope, dispatch) : { attached: false, known: false }
+      if (!state || typeof state.attached !== 'boolean' || typeof state.known !== 'boolean') invalid('Flow did not confirm the saved reference state. Existing uploads were preserved.')
+      saveCheckpoint(state)
+      if (state.attached) {
+        report?.({ id, label, state: 'done', detail: 'Already attached in this Flow composer; skipped upload and attachment.' })
+        return
+      }
+      report?.({ id, label, state: 'running', detail: state.known ? 'Continuing the existing upload or restoring its saved attachment. This file is not uploaded again.' : 'Uploading this unfinished reference and waiting for its attachment.' })
+      const media = state.known ? { name: item.name } : { ...await this.photo(file), name: item.name }
+      if (!state.known && state.checkpoint) {
+        const pending = structuredClone(state.checkpoint)
+        if (!pending.assets.some(asset => asset.name === item.name)) pending.assets.push({ ...item, stage: 'uploading' })
+        saveCheckpoint({ checkpoint: pending })
+      }
+      const attached = await this.preparationStep<{ checkpoint?: import('./contracts.cjs').FlowPreparationCheckpoint }>('attach', { url, requestId: request.requestId, kind: item.kind, file: media }, scope, dispatch)
+      saveCheckpoint(attached)
+      report?.({ id, label, state: 'done', detail: 'Reference attachment confirmed and its resume checkpoint saved.' })
     }
-    for (const [index, file] of files.entries()) {
-      const label = referenceLabels?.[index] ?? `Reference photo ${index + 1}`
-      report?.({ id: `reference-${index}`, label, state: 'running', detail: `Uploading ${index + 1} of ${files.length}; waiting for the attachment to appear in Flow.` })
-      await this.preparationStep('attach', { url, kind: 'reference', file: await this.photo(file) }, scope, dispatch)
-      report?.({ id: `reference-${index}`, label, state: 'done', detail: 'Companion confirmed this photo attachment is visible in the Flow composer.' })
-    }
-    report?.({ id: 'verify', label: 'Final prompt and reference check', state: 'running', detail: 'Checking attachment count, saved prompt and existing result IDs before submission.' })
+    if (startFrame) await attach(startFrame, manifest[0], 'start-frame', 'Previous approved scene: start frame')
+    for (const [index, file] of files.entries()) await attach(file, manifest[index + (startFrame ? 1 : 0)], `reference-${index}`, referenceLabels?.[index] ?? `Reference ${index + 1}`)
+    report?.({ id: 'verify', label: 'Final prompt and reference check', state: 'running', detail: 'Checking the retained prompt and every attachment before submission.' })
     const baseline = await this.request<unknown>('baseline', { url, prompt: request.prompt, references: files.length, startFrame: !!startFrame }, scope, dispatch)
     if (!Array.isArray(baseline) || baseline.some(value => typeof value !== 'string') || baseline.length > 10000) invalid('Invalid Flow result baseline.')
-    report?.({ id: 'verify', label: 'Final prompt and reference check', state: 'done', detail: `${files.length} reference photo(s)${startFrame ? ' and the start frame' : ''} confirmed. Generate has not been clicked by this preparation step.` })
+    report?.({ id: 'verify', label: 'Final prompt and reference check', state: 'done', detail: `${files.length} reference file(s)${startFrame ? ' and the start frame' : ''} confirmed. Generate has not been clicked by preparation.` })
     return baseline
   }
   async submit(url: string, scope?: string, dispatch?:FlowCommandDispatch): Promise<void> {
@@ -202,7 +229,10 @@ export class FlowCompanion {
   }
   async results(url: string, prompt: string, outputType: string, baseline: string[], scope?: string): Promise<RemoteResult[]> {
     if (!validProject(url)) invalid('Invalid Flow project.')
-    const results = await this.request<unknown>('results', { url, prompt, outputType, baseline }, scope)
+    const response = await this.request<unknown>('results', { url, prompt, outputType, baseline }, scope)
+    const inspected = response as { results?: unknown; diagnostic?: unknown } | null
+    const results = Array.isArray(response) ? response : inspected?.results
+    if (typeof inspected?.diagnostic === 'string') this.resultDetails.set(scope ?? url, inspected.diagnostic.slice(0, 400))
     if (!Array.isArray(results) || results.length > 4 || results.some(item => !item || typeof item.id !== 'string' || typeof item.selector !== 'string')) invalid('Invalid Flow result association.')
     return results
   }
@@ -249,6 +279,7 @@ export class FlowCompanion {
       prepare: (url, request, report) => this.prepare(url, request, report, projectId, dispatch),
       submit: url => this.submit(url, projectId, dispatch),
       results: (url, prompt, outputType, baseline) => send('results', () => this.results(url, prompt, outputType, baseline, projectId)),
+      collectionStatus: () => this.resultDetails.get(projectId) ?? '',
       download: (url, result, directory) => send('download', () => this.download(url, result, directory, projectId)),
       close: async () => { this.cancelledScopes.add(projectId) },
     }

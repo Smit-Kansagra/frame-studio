@@ -118,7 +118,7 @@ async function execute(command) {
   if (!context && ['prepare', 'results', 'download', 'armSubmit', 'nameProject'].includes(action)) await navigate(payload.url)
   if (['armSubmit','nameProject'].includes(action)) { const tab = await selectedTab(context); await retryTabEdit(async()=>{await selectedTab(context);return chrome.tabs.update(activeTabId(context),{active:true})}); await chrome.windows.update(tab.windowId,{focused:true}) }
   if (action === 'download') return await download(payload, id, context)
-  if (!['inspect', 'nameProject', 'prepare', 'attach', 'checkReference', 'baseline', 'armSubmit', 'confirmSubmit', 'results'].includes(action)) throw new Error('Unsupported companion command.')
+  if (!['inspect', 'nameProject', 'prepare', 'referenceState', 'attach', 'checkReference', 'baseline', 'armSubmit', 'confirmSubmit', 'results'].includes(action)) throw new Error('Unsupported companion command.')
   const value = await pageAction(action, payload, id, context)
   await selectedTab(context)
   return value

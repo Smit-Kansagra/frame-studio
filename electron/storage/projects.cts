@@ -38,12 +38,15 @@ export function validateProjectDraft(value: unknown): ProjectDraft {
   if (draft.outputType !== 'post' && draft.outputType !== 'reel') invalid('Choose Post or Reel.')
   if (typeof draft.preset !== 'string' || !Object.hasOwn(presets, draft.preset) || presets[draft.preset as ProjectPreset].outputType !== draft.outputType) invalid('Choose dimensions compatible with Post or Reel.')
   if (typeof draft.duration !== 'number' || !Number.isFinite(draft.duration) || (draft.outputType === 'reel' ? draft.duration < 0.1 || draft.duration > 600 : draft.duration !== 0)) invalid('Reel duration must be between 0.1 and 600 seconds. Posts have no duration.')
-  return { ...(draft.id ? { id: draft.id as string, expectedRevision: draft.expectedRevision as number } : {}), name: draft.name.trim(), productId: draft.productId as string, themeId: draft.themeId as string, characterId: draft.characterId as string | null, outputType: draft.outputType, preset: draft.preset as ProjectPreset, duration: draft.duration, ...(draft.storyboard !== undefined ? { storyboard: validateStoryboard(draft.storyboard, draft.outputType) } : {}) }
+  const storyboard = draft.storyboard !== undefined ? validateStoryboard(draft.storyboard, draft.outputType) : undefined
+  if (storyboard?.singleClip && (draft.duration !== 15 || draft.preset !== 'reel-vertical')) invalid('A single reel requires 9:16 and a 15-second duration.')
+  return { ...(draft.id ? { id: draft.id as string, expectedRevision: draft.expectedRevision as number } : {}), name: draft.name.trim(), productId: draft.productId as string, themeId: draft.themeId as string, characterId: draft.characterId as string | null, outputType: draft.outputType, preset: draft.preset as ProjectPreset, duration: draft.duration, ...(storyboard ? { storyboard } : {}) }
 }
 function validateStoryboard(value: unknown, outputType: unknown): ProjectStoryboard {
   if (!value || typeof value !== 'object' || Array.isArray(value)) invalid('The project storyboard is invalid.')
   const board = value as Record<string, unknown>
-  if (Object.keys(board).some(key => !['scenes', 'compositionPrompt'].includes(key))) invalid('The project storyboard contains an unknown field.')
+  if (Object.keys(board).some(key => !['scenes', 'compositionPrompt', 'singleClip'].includes(key))) invalid('The project storyboard contains an unknown field.')
+  if (board.singleClip !== undefined && (board.singleClip !== true || outputType !== 'reel')) invalid('The single-clip storyboard must belong to a Reel.')
   if (typeof board.compositionPrompt !== 'string' || board.compositionPrompt.length > 20000 || board.compositionPrompt.includes('\0')) invalid('Keep the composition prompt to 20,000 characters or fewer.')
   if (!Array.isArray(board.scenes) || board.scenes.length > 30 || (outputType === 'reel' ? !board.scenes.length : board.scenes.length !== 0)) invalid('A Reel needs 1–30 scenes. A Post uses one composition instead of scenes.')
   const ids = new Set<string>()
@@ -60,7 +63,8 @@ function validateStoryboard(value: unknown, outputType: unknown): ProjectStorybo
     if (scene.transition !== 'cut') invalid('Only hard-cut transitions are supported.')
     return { id: scene.id, name: scene.name.trim(), prompt: scene.prompt.trim(), sourceDuration: scene.sourceDuration as number, editDuration: scene.editDuration as number, relationship: scene.relationship as 'new-shot' | 'continue', transition: 'cut' as const }
   }) as ProjectScene[]
-  return { scenes, compositionPrompt: board.compositionPrompt.trim() }
+  if (board.singleClip && (scenes.length !== 1 || scenes[0].sourceDuration !== 15 || scenes[0].editDuration !== 15)) invalid('A single reel requires exactly one 15-second clip.')
+  return { scenes, compositionPrompt: board.compositionPrompt.trim(), ...(board.singleClip ? { singleClip: true } : {}) }
 }
 const storyboardFromTheme = (theme: ThemeInfo): ProjectStoryboard => ({ scenes: theme.scenes.map(({ duration, ...scene }) => ({ ...scene, sourceDuration: duration, editDuration: duration })), compositionPrompt: theme.compositionPrompt })
 export class Projects {
@@ -74,7 +78,7 @@ export class Projects {
   async get(id: string): Promise<ProjectInfo> {
     const row = this.row(id)
     const content = JSON.parse(row.content) as ProjectDraft, snapshot = JSON.parse(row.snapshot) as ProjectSnapshot
-    return { ...content, preset: presetForTheme(snapshot.theme), storyboard: content.storyboard ?? storyboardFromTheme(snapshot.theme), id: row.id, revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at, snapshot }
+    return { ...content, preset: content.storyboard?.singleClip ? 'reel-vertical' : presetForTheme(snapshot.theme), storyboard: content.storyboard ?? storyboardFromTheme(snapshot.theme), id: row.id, revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at, snapshot }
   }
   async list(): Promise<ProjectInfo[]> {
     const rows = this.db.prepare('SELECT id FROM projects WHERE trashed_at IS NULL ORDER BY updated_at DESC, id').all() as { id: string }[]
@@ -162,8 +166,9 @@ export class Projects {
       if (draft.characterId && old?.characterId !== draft.characterId && !character?.photos.find(photo => photo.id === character.primaryAssetId)?.available) invalid('This character primary photo is unavailable. Replace it in Characters before selecting it.')
       const snapshot: ProjectSnapshot = { product, theme, character }
       const storyboard = draft.storyboard ?? (old?.themeId === draft.themeId && old.storyboard ? old.storyboard : storyboardFromTheme(theme))
+      if (storyboard.singleClip && (draft.duration !== 15 || draft.preset !== 'reel-vertical')) invalid('A single reel requires 9:16 and a 15-second duration.')
       const name = draft.name || `${product.name} · ${draft.outputType === 'reel' ? 'Reel' : 'Post'}`.slice(0, 120)
-      const content: ProjectDraft = { ...draft, preset: presetForTheme(theme), name, storyboard }
+      const content: ProjectDraft = { ...draft, preset: storyboard.singleClip ? 'reel-vertical' : presetForTheme(theme), name, storyboard }
       delete content.id; delete content.expectedRevision
       const id = previous?.id ?? randomUUID(), revision = (previous?.revision ?? 0) + 1, now = new Date().toISOString()
       if (!previous) await this.paths.directory(resultFolder(id, name))

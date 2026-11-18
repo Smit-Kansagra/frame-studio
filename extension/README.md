@@ -1,5 +1,37 @@
 # Flow Bridge
 
+Preview.67 bundles Flow Bridge 0.1.18 with page adapter `0.1.6-fast.32`. Video detection accepts a play glyph inside a footer containing the clip title. All native media IDs enter the pre-submit baseline; result collection no longer relies on an exact hover-toolbar "Reuse prompt" label. Saved reference IDs remain excluded and full-prompt matching still binds generated results to their request. Collection status now explains ready-card and prompt-match counts instead of silently repeating an empty result count. If the owner navigates an old project tab elsewhere in Flow, collection reopens only its saved project URL in a fresh inactive tab.
+
+FFmpeg and FFprobe ship with this installer. After automatic Original size download, the local video processor checks three frames for a stationary known Gemini star, requires agreement in two frames, and applies local delogo filtering across the clip before import. Unknown marks preserve the video content. Audio, duration and dimensions are checked before committing the result. Update the app, reload Flow Bridge, refresh Flow and pair again; resume the existing request without generating again. Tests and live generation were not run for preview.67, at the owner's request.
+
+Preview.66 bundles Flow Bridge 0.1.17 with page adapter `0.1.6-fast.31`. Result collection recognizes video poster cards and play controls, and does not require playback to load before collecting a completed video. Exact prompt matching, existing-result baselines and generated-card checks remain required. Reel collection saves the original downloaded video directly for local playback; it no longer requires FFmpeg/FFprobe conversion during import. Final reel export still requires those local tools.
+
+Update the app, reload Flow Bridge, refresh the Flow tab and pair again. Resume collection of the existing submitted request instead of generating again. Tests and live generation were not run for preview.66, at the owner's request; the installer was compiled and packaged for owner testing.
+
+Preview.65 bundles Flow Bridge 0.1.16 with page adapter `0.1.6-fast.30`. After a video upload, the adapter selects its matching asset row and automatically clicks **Add to prompt** in the video preview panel. It waits for the video attachment to appear in the composer before continuing. Video names displayed without their file extension are recognized only when the requested reference is unambiguous. An already-open video preview is retained instead of being closed for a library-menu detour. Existing upload checkpoints and asset-identity checks remain in use.
+
+Update the app, reload Flow Bridge, refresh the Flow tab and pair again. Tests and live generation were not run for preview.65, at the owner's request; the installer was compiled and packaged for owner testing.
+
+Preview.64 bundles Flow Bridge 0.1.15 with page adapter `0.1.6-fast.29`. At the owner's explicit request, it automatically clicks only the plain **I agree** button inside the exact **Rights to use this video** dialog. It waits for that dialog to close and continues the current step. It does not select **do not show again**, accept other dialogs, or handle Google account verification.
+
+Preparation checkpoints retain the request ID, Flow URL, prompt/settings identity, reference manifest and confirmed remote asset IDs in the local Flow job and Chrome extension storage. Resume preserves completed activity and the named project, checks retained settings/prompt without clearing existing attachments, skips confirmed uploads, and restores missing attachments from their existing Flow assets. In-progress uploads are observed rather than sent again after a lost acknowledgement. A changed or missing remote asset stops with its checkpoint preserved instead of guessing. Requests already submitted or uncertain continue result collection without another Generate click; existing download associations remain intact.
+
+Update the app, reload Flow Bridge, refresh the Flow tab and pair again. Use **Resume request** on an interrupted preparation. Tests and live generation were not run for preview.64, at the owner's request; the installer was compiled and packaged for owner testing.
+
+Preview.63 bundles Flow Bridge 0.1.14 with page adapter `0.1.6-fast.28`. It detects Google's "Rights to use this video" dialog before clicking or waiting for a project field. Instead of reporting a project-name timeout behind that modal, it preserves the request and asks the owner to complete the upload-rights confirmation in Chrome, then retry the existing request. The extension does not accept the declaration or select "do not show again" on the owner's behalf. Reload the extension, refresh the Flow tab, and pair again after updating.
+
+Tests and live generation were not run for preview.63, at the owner's request. The installer was compiled and packaged for owner testing.
+
+Preview.62 bundles Flow Bridge 0.1.13 with page adapter `0.1.6-fast.27`. The screenshot-based fix reads the selected model from the model dropdown's displayed value, without requiring `aria-selected` on its trigger. It retains an already-selected Omni 1.2 Flash model instead of opening that dropdown again. Resolution and result count can be confirmed from the composer summary; its orientation icon is used only when the settings offer exactly 9:16 and 16:9. Model menu choices do not count as the current dropdown value. Reload the extension, refresh the Flow tab, and pair again after updating.
+
+Tests and live generation were not run for preview.62, at the owner's request. The installer was compiled and packaged for owner testing.
+
+Preview.61 bundles Flow Bridge 0.1.12 with page adapter `0.1.6-fast.26`. It reads the selected duration from Flow's generation summary before changing the duration control. A displayed `15s` is retained. Millisecond slider values are converted only when the current displayed and numeric values establish that unit. Unsupported durations and changed settings still stop submission. Reload the extension, refresh the Flow tab, and pair again after updating.
+
+Preview.60 bundles Flow Bridge 0.1.11 with page adapter `0.1.6-fast.25`. New single-reel projects use Video, 9:16, Omni Flash 1.2, 720p, one result and 15 seconds. The adapter verifies these settings before submission and supports image and video references up to 20 MB each. Missing or changed settings stop submission. Reload this extension in `chrome://extensions`, refresh the Flow tab, and pair again after updating the app.
+
+Single-reel storyboard, reference, persistence and settings behavior was checked in isolated desktop and offline browser tests. Live generation on a signed-in Google Flow account was not tested.
+
 Preview.56 bundles Flow Bridge 0.1.10. The connection controls remain visible; optional help and upload diagnostics are collapsed. The Flow page adapter and generation behavior are unchanged. Product Find uses the separate Product Finder 0.1.4 popup. Current setup instructions below continue to apply.
 
 ## Current setup: preview.53

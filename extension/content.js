@@ -3,12 +3,13 @@
 (() => {
   if (globalThis.__frameStudioCompanion) return
   globalThis.__frameStudioCompanion = true
-  const ADAPTER_VERSION = '0.1.6-fast.24'
+  const ADAPTER_VERSION = '0.1.6-fast.32'
   const seen = new Map()
   let prepared = null
   let submission = null
   let lastFailure = null
   let referenceCheck = null
+  let referenceMediaType = 'image/png'
   const compact = value => String(value || '').replace(/[\u200b-\u200f\ufeff]/g, '').replace(/\s+/g, ' ').trim()
   const visible = element => element instanceof HTMLElement && element.checkVisibility() && !element.closest('[aria-hidden="true"]')
   const label = element => compact(element.getAttribute('aria-label') || element.labels?.[0]?.textContent || element.getAttribute('title') || element.textContent)
@@ -76,16 +77,55 @@
     // 3:4 for a 4:5 Post when that is the closest visible supported ratio.
     return available.sort((a, b) => Math.min(ratioNumber(b) / desired, desired / ratioNumber(b)) - Math.min(ratioNumber(a) / desired, desired / ratioNumber(a)))[0]
   }
-  async function applyRatio(target, root) {
+  async function applyRatio(target, root, exact = false) {
     const actual = sourceRatio(target, root)
+    if (exact && actual !== target) throw new Error(`Flow does not offer the required ${target} ratio. Nothing was submitted.`)
     await setting(/aspect ratio|orientation/i, actual, new RegExp(`^(?:.*\\s)?${actual.replaceAll('.', '\\.').replaceAll(':', ':')}(?:\\s.*)?$`), root)
     return actual
   }
   const one = (items, name) => { if (items.length !== 1) throw new Error(`Flow ${name}: expected one supported control, found ${items.length}. Paused without guessing.`); return items[0] }
-  const click = (element, name) => { if (element.disabled || element.getAttribute('aria-disabled') === 'true') throw new Error(`Flow ${name} is disabled. Nothing was submitted.`); element.click() }
+  function uploadRightsDialog() {
+    const matchesDialog = panel => visible(panel) && /\bRights to use this video\b/i.test(panel.innerText || '') && controls(/^I agree\b/i, panel).length > 0 && controls(/^Cancel$/i, panel).length === 1
+    let blocked = [...document.querySelectorAll('[role="dialog"],[role="alertdialog"],dialog,[aria-modal="true"],.cdk-overlay-pane')].find(matchesDialog)
+    if (!blocked) {
+      // The screenshot also applies to modal components without dialog roles.
+      // Require the exact title and its agreement/cancel controls together.
+      const titles = [...document.querySelectorAll('h1,h2,h3,[role="heading"],span,p')].filter(element => visible(element) && /^Rights to use this video$/i.test(compact(element.textContent)))
+      for (const title of titles) {
+        let panel = title.parentElement
+        while (panel && panel !== document.body && !panel.matches('main,[role="main"]')) {
+          if (matchesDialog(panel)) { blocked = panel; break }
+          panel = panel.parentElement
+        }
+        if (blocked) break
+      }
+    }
+    return blocked || null
+  }
+  function assertNoUploadRightsDialog() {
+    if (uploadRightsDialog()) throw new Error('The upload-rights dialog appeared during this action. Resume this saved request to accept it and continue without restarting completed uploads.')
+  }
+  async function acceptUploadRightsDialog() {
+    // The owner explicitly requested automatic acceptance of this exact dialog.
+    // Do not change the persistent preference or accept any unrelated dialog.
+    const clicked = new WeakSet(), deadline = Date.now() + 45000
+    for (;;) {
+      const dialog = uploadRightsDialog()
+      if (!dialog) return
+      guard()
+      const agree = controls(/^I agree$/i, dialog)
+      if (agree.length === 1 && !agree[0].disabled && agree[0].getAttribute('aria-disabled') !== 'true' && !clicked.has(dialog)) {
+        clicked.add(dialog)
+        agree[0].click()
+      }
+      if (Date.now() >= deadline) throw new Error('Flow upload-rights confirmation did not close. The preparation checkpoint is preserved; resume this existing request.')
+      await new Promise(resolve => setTimeout(resolve, 150))
+    }
+  }
+  const click = (element, name) => { assertNoUploadRightsDialog(); if (element.disabled || element.getAttribute('aria-disabled') === 'true') throw new Error(`Flow ${name} is disabled. Nothing was submitted.`); element.click() }
   const wait = async (test, description, timeout = 15000) => {
     const deadline = Date.now() + timeout
-    while (Date.now() < deadline) { const value = test(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 150)) }
+    while (Date.now() < deadline) { await acceptUploadRightsDialog(); const value = await test(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 150)) }
     throw new Error(`Flow did not confirm ${description}. The existing request is preserved.`)
   }
   const guard = url => {
@@ -101,6 +141,62 @@
     return one(named.length ? named : editors, 'prompt editor')
   }
   const promptText = element => element instanceof HTMLTextAreaElement ? element.value : element.innerText
+  const preparationStorageKey = requestId => `frame-flow-preparation:${requestId}`
+  async function persistPreparation() {
+    const checkpoint = prepared?.checkpoint
+    if (!checkpoint) return undefined
+    for (const asset of checkpoint.assets) {
+      const key = prepared.assets.get(asset.name)
+      if (key) asset.key = key
+    }
+    if (chrome.storage?.local) await chrome.storage.local.set({ [preparationStorageKey(checkpoint.requestId)]: checkpoint })
+    return checkpoint
+  }
+  function rememberReference(name, kind, stage) {
+    const checkpoint = prepared?.checkpoint
+    if (!checkpoint) return
+    if (!checkpoint.manifest.some(item => item.name === name && item.kind === kind)) throw new Error('This reference does not belong to the saved request.')
+    let asset = checkpoint.assets.find(item => item.name === name)
+    if (!asset) { asset = { name, kind, stage }; checkpoint.assets.push(asset) }
+    asset.stage = stage
+    const key = prepared.assets.get(name)
+    if (key) asset.key = key
+  }
+  function rememberReferenceKey(name, key) {
+    const previous = prepared.assets.get(name)
+    if (previous && previous !== key) throw new Error('The saved reference asset identity changed. Existing uploads were preserved; a different file was not substituted.')
+    prepared.assets.set(name, key)
+  }
+  async function referenceState(name, kind) {
+    if (!prepared || prepared.url !== location.href || typeof name !== 'string' || name.length > 200 || /[\\/\0]/.test(name) || !['reference','startFrame'].includes(kind)) throw new Error('Invalid saved reference lookup.')
+    const checkpoint = prepared.checkpoint
+    if (checkpoint && !checkpoint.manifest.some(item => item.name === name && item.kind === kind)) throw new Error('The reference does not match this preparation checkpoint.')
+    const previous = checkpoint?.assets.find(item => item.name === name)
+    if (previous?.key) prepared.assets.set(name, previous.key)
+    const library = libraryReference(name)
+    if (library) rememberReferenceKey(name, library.key)
+    const attached = attachmentPresent(name)
+    if (attached) {
+      if (!prepared.files.includes(name)) prepared.files.push(name)
+      if (kind === 'startFrame') prepared.startFrame = true
+      rememberReference(name, kind, 'attached')
+    } else if (library) rememberReference(name, kind, 'uploaded')
+    const known = attached || !!previous || !!library || referenceCards(name, assetPicker()).length === 1
+    return { attached, known, checkpoint: await persistPreparation() }
+  }
+  function reconcileReferenceSet(removeForeign) {
+    const expected = new Set(prepared.files.map(name => prepared.assets.get(name)).filter(Boolean))
+    const ingredients = [...composer().querySelectorAll('button[aria-label="Ingredient"]')].filter(visible)
+    for (const ingredient of ingredients) {
+      const keys = [...new Set([...ingredient.querySelectorAll('img,video')].map(mediaKey).filter(Boolean))]
+      if (keys.some(key => expected.has(key))) continue
+      if ([...ingredient.querySelectorAll('img,video')].some(media => prepared.files.some(name => [media.getAttribute('alt'),media.getAttribute('aria-label'),media.getAttribute('title'),media.getAttribute('data-filename')].includes(name)))) continue
+      const removable = expected.size === prepared.files.length && keys.length === 1 && ingredient.getAttribute('aria-busy') !== 'true' && !ingredient.querySelector('[role="progressbar"]') && [...ingredient.querySelectorAll('mat-icon')].some(icon => /^cancel$/i.test(compact(icon.textContent)))
+      if (!removeForeign || !removable) throw new Error('The composer contains an unconfirmed attachment from another preparation. Saved uploads are preserved; finish or remove that attachment before resuming this request.')
+      // Remove only a different completed composer chip, never its library asset.
+      click(ingredient, 'remove attachment belonging to a different request')
+    }
+  }
   const referencePattern = /^(?:\+|add(?:_2|_circle|_circle_outline|_photo_alternate)?|add (?:to (?:the )?prompt|media|images?|attachments?|references?)|attach(?: files?| media| images?)?|upload(?: images?| media)?)$/i
   function filledPlus(path) {
     // Material icons can draw a plus as one closed, filled outline rather
@@ -222,47 +318,84 @@
   }
   function attachmentPresent(name) {
     const area = composer(), expected = prepared?.assets?.get(name)
-    return [...area.querySelectorAll('img,[aria-label],[title],[data-filename]')].some(element => {
+    return [...area.querySelectorAll('img,video,[aria-label],[title],[data-filename]')].some(element => {
       if (!visible(element) || element.closest('[role="dialog"],[role="menu"],[role="listbox"]')) return false
       if (element.closest('[aria-busy="true"],[role="progressbar"]') || element.closest('[role="group"]')?.querySelector('[role="progressbar"]')) return false
       const named = [element.getAttribute('alt'), element.getAttribute('aria-label'), element.getAttribute('title'), element.getAttribute('data-filename')].includes(name)
-      const identity = expected && element instanceof HTMLImageElement && mediaKey(element) === expected &&
+      const identity = expected && (element instanceof HTMLImageElement || element instanceof HTMLVideoElement) && mediaKey(element) === expected &&
         element.closest('button[aria-label="Ingredient"][aria-busy="false"]')
       // The real uploader inserts role=group aria-label=<filename> while its
       // progress is 0%. That placeholder is not an attached image.
-      return (named && element instanceof HTMLImageElement) || !!identity
+      return (named && (element instanceof HTMLImageElement || element instanceof HTMLVideoElement)) || !!identity
     })
   }
   function mediaKey(image) {
     const id = image.getAttribute('data-media-id')
-    if (/^[0-9a-f-]{36}$/i.test(id || '')) return `https://flow-content.google/image/${id}`
+    if (/^[0-9a-f-]{36}$/i.test(id || '')) return `asset:${id}`
     try {
       const url = new URL(image.currentSrc || image.src, location.href)
       // The live picker and composer use the same immutable asset ID but the
       // signed URL query can change. Do not infer identity from generic alt text.
-      if (url.protocol === 'https:' && url.hostname === 'flow-content.google' && /^\/image\/[0-9a-f-]{36}$/i.test(url.pathname)) return url.origin + url.pathname
+      if (url.protocol === 'https:' && url.hostname === 'flow-content.google' && /^\/(?:image|video)\/[0-9a-f-]{36}$/i.test(url.pathname)) return `asset:${url.pathname.split('/').pop()}`
     } catch {}
     return null
+  }
+  const videoReferenceName = name => /\.(?:mp4|mov|webm)$/i.test(name)
+  function videoPreviewConfirmControls(picker) {
+    // The selected video's preview can be a sibling of the asset-list pane.
+    const panel = picker.closest('[role="dialog"],[role="alertdialog"],dialog,[aria-modal="true"],.cdk-overlay-pane') || picker
+    return controls(/^add to prompt$/i, panel)
+  }
+  function referenceNameMatches(value, name) {
+    value = compact(value)
+    if (value === name) return true
+    if (!videoReferenceName(name)) return false
+    const stem = name.replace(/\.(?:mp4|mov|webm)$/i, '')
+    const aliases = prepared?.checkpoint?.manifest.filter(item => videoReferenceName(item.name) && item.name.replace(/\.(?:mp4|mov|webm)$/i, '') === stem) || []
+    return aliases.length <= 1 && value === stem
   }
   function referenceCards(name, picker) {
     if (!picker) return []
     const cards = [...picker.querySelectorAll('[role="option"]')].filter(card => visible(card) &&
-      [...card.querySelectorAll('.asset-title')].some(title => compact(title.textContent) === name))
+      [...card.querySelectorAll('.asset-title')].some(title => referenceNameMatches(title.textContent, name)))
     // Also retain the previous explicit metadata contract, deduplicating the
     // interactive card when both its title and thumbnail expose the filename.
     for (const named of picker.querySelectorAll('img,[aria-label],[title],[data-filename]')) {
-      if (!visible(named) || ![named.getAttribute('alt'),named.getAttribute('aria-label'),named.getAttribute('title'),named.getAttribute('data-filename')].includes(name)) continue
+      if (!visible(named) || ![named.getAttribute('alt'),named.getAttribute('aria-label'),named.getAttribute('title'),named.getAttribute('data-filename')].some(value => referenceNameMatches(value, name))) continue
       const card = named.closest('button,[role="button"],[role="option"],[role="gridcell"],[tabindex="0"]')
       if (card && picker.contains(card)) cards.push(card)
     }
-    return [...new Set(cards)]
+    if (videoReferenceName(name)) {
+      // The video picker shows the extensionless name beside its thumbnail.
+      // Select that exact asset row before confirming its preview panel.
+      const titles = [...picker.querySelectorAll('.asset-title,span,div')].filter(element => referenceNameMatches(element.textContent, name) && visible(element))
+      for (const title of titles) {
+        let card = title.closest('button,[role="button"],[role="option"],[role="gridcell"],[tabindex="0"]')
+        if (!card || !picker.contains(card)) {
+          card = title.parentElement
+          while (card && card !== picker && compact(card.textContent).length <= 160) {
+            if (card.querySelector('img,video') && !controls(/^add to prompt$/i, card).length) break
+            card = card.parentElement
+          }
+        }
+        if (card && card !== picker && picker.contains(card) && card.querySelector('img,video') && !controls(/^add to prompt$/i, card).length) cards.push(card)
+      }
+    }
+    const expected = prepared?.assets?.get(name)
+    if (expected) {
+      const identified = [...picker.querySelectorAll('[role="option"]')].filter(card => visible(card) && [...card.querySelectorAll('img,video')].some(media => mediaKey(media) === expected))
+      if (identified.length) return identified
+    }
+    const unique = [...new Set(cards)]
+    return unique.filter(card => !unique.some(other => other !== card && card.contains(other)))
   }
   function libraryReference(name) {
-    const matches = [...document.querySelectorAll('flow-grid-tile-container')].filter(tile => visible(tile) && tile.getAttribute('aria-label') === name)
+    const expected = prepared?.assets?.get(name)
+    const matches = [...document.querySelectorAll('flow-grid-tile-container')].filter(tile => visible(tile) && (expected ? [...tile.querySelectorAll('img,video')].some(media => mediaKey(media) === expected) : referenceNameMatches(tile.getAttribute('aria-label'), name)))
     if (matches.length > 1) throw new Error('Multiple Flow library assets share this reference filename. Nothing was selected or uploaded.')
     const tile = matches[0]
     if (!tile || tile.querySelector('[role="progressbar"],[aria-busy="true"]')) return null
-    const image = tile.querySelector('img'), key = image && mediaKey(image)
+    const image = expected ? [...tile.querySelectorAll('img,video')].find(media => mediaKey(media) === expected) : tile.querySelector('img,video'), key = image && mediaKey(image)
     return key ? { tile, key } : null
   }
   const uploadPattern = /^(?:upload(?: media| images?| files?| from computer)?|upload_file|upload_from_computer|file_upload)$/i
@@ -277,7 +410,7 @@
     return null
   }
   function imageInputs(root = document) {
-    return [...root.querySelectorAll('input[type="file"]')].filter(input => !input.disabled && (!input.accept || /image|\.png|\.jpe?g|\.webp/i.test(input.accept)))
+    return [...root.querySelectorAll('input[type="file"]')].filter(input => !input.disabled && (!input.accept || (referenceMediaType.startsWith('video/') ? /video|\.mp4|\.mov|\.webm/i : /image|\.png|\.jpe?g|\.webp/i).test(input.accept)))
   }
   function referenceInput(picker, upload = null) {
     const candidates = imageInputs()
@@ -319,11 +452,29 @@
     click(upload, 'Upload media')
     return wait(() => referenceInput(assetPicker(), upload), 'Upload media image input')
   }
+  async function showExistingReference(name) {
+    if (attachmentPresent(name) || libraryReference(name) || referenceCards(name, assetPicker()).length) return
+    let picker = assetPicker()
+    if (!picker) {
+      click(one(referenceTriggers(composer()), 'reference picker for the saved upload'), 'open saved reference picker')
+      picker = await wait(assetPicker, 'saved reference asset picker')
+    }
+    const searches = [...picker.querySelectorAll('input')].filter(input => visible(input) && /^search assets$/i.test(compact(input.getAttribute('placeholder') || input.getAttribute('aria-label'))))
+    if (searches.length === 1) {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(searches[0], name)
+      searches[0].dispatchEvent(new Event('input', { bubbles: true }))
+      searches[0].dispatchEvent(new Event('change', { bubbles: true }))
+    }
+    await wait(() => attachmentPresent(name) || libraryReference(name) || referenceCards(name, assetPicker()).length, `saved upload becoming available: ${name}`, 240000)
+  }
   async function confirmReference(name) {
     await wait(() => libraryReference(name) || referenceCards(name, assetPicker()).length || attachmentPresent(name), `uploaded photo processed and available: ${name}`, 240000)
-    const library = libraryReference(name)
+    const videoPicker = videoReferenceName(name) && assetPicker()
+    const library = videoPicker ? null : libraryReference(name)
     if (library) {
-      prepared.assets.set(name, library.key)
+      rememberReferenceKey(name, library.key)
+      const asset = prepared.checkpoint?.assets.find(item => item.name === name)
+      if (asset) { asset.key = library.key; if (asset.stage !== 'attached') asset.stage = 'uploaded'; await persistPreparation() }
       referenceCheck = { phase: 'library-add-to-prompt', assetRecorded: true }
       if (attachmentPresent(name)) { referenceCheck.phase = 'complete'; return }
       if (assetPicker()) {
@@ -346,17 +497,17 @@
       return
     }
     let selectionMade = false, confirmationMade = false
-    const ingredientKeys=()=>[...new Set([...composer().querySelectorAll('button[aria-label="Ingredient"][aria-busy="false"] img')].filter(visible).map(mediaKey).filter(Boolean))]
+    const ingredientKeys=()=>[...new Set([...composer().querySelectorAll('button[aria-label="Ingredient"][aria-busy="false"] img,button[aria-label="Ingredient"][aria-busy="false"] video')].filter(visible).map(mediaKey).filter(Boolean))]
     const before=new Set(ingredientKeys())
     referenceCheck={phase:'waiting',titleMatches:0,stableKeys:0,selected:false,assetRecorded:false}
-    await wait(() => {
+    await wait(async () => {
       if(selectionMade){
         const added=ingredientKeys().filter(key=>!before.has(key))
         referenceCheck.newCompleted=added.length
         // The exact filename option was selected by this command. Associate
         // it with the single new completed chip, not a transient/recycled
         // thumbnail which can still show the preceding asset's URL.
-        if(added.length===1){prepared.assets.set(name,added[0]);referenceCheck.assetRecorded=true}
+        if(added.length===1){rememberReferenceKey(name,added[0]);referenceCheck.assetRecorded=true;await persistPreparation()}
         if(added.length>1) throw new Error('More than one new Flow ingredient appeared after selecting the reference. Paused without guessing.')
       }
       if (attachmentPresent(name)) {referenceCheck.phase='complete';return true}
@@ -366,21 +517,34 @@
       referenceCheck.titleMatches=cards.length
       if (!selectionMade && cards.length === 1) {
         if (cards[0].querySelector('[role="progressbar"]') || /^Uploading\b/i.test(label(cards[0]))) return false
-        const keys = [...new Set([...cards[0].querySelectorAll('img')].map(mediaKey).filter(Boolean))]
+        const keys = [...new Set([...cards[0].querySelectorAll('img,video')].map(mediaKey).filter(Boolean))]
         referenceCheck.stableKeys=keys.length
         referenceCheck.selected=true;referenceCheck.phase='waiting-for-completed-chip'
         click(cards[0], 'select uploaded reference'); selectionMade = true; return false
       }
       if (selectionMade && !confirmationMade) {
-        const confirm = controls(/^(?:add(?: to prompt)?|attach|insert|use selected|add selected|done)$/i, picker)
-        if (confirm.length === 1 && !confirm[0].disabled && confirm[0].getAttribute('aria-disabled') !== 'true') { click(confirm[0], 'attach selected reference'); confirmationMade = true }
+        const previewConfirm = videoReferenceName(name) ? videoPreviewConfirmControls(picker) : []
+        const confirm = previewConfirm.length ? previewConfirm : controls(/^(?:add(?: to prompt)?|attach|insert|use selected|add selected|done)$/i, picker)
+        if (confirm.length > 1) throw new Error('Flow exposes multiple attachment confirmation buttons. The uploaded file is preserved; no unrelated button was clicked.')
+        if (confirm.length === 1 && !confirm[0].disabled && confirm[0].getAttribute('aria-disabled') !== 'true') {
+          referenceCheck.phase = videoReferenceName(name) ? 'video-preview-add-to-prompt' : 'confirm-selected-reference'
+          await persistPreparation()
+          click(confirm[0], videoReferenceName(name) ? 'Add to prompt for selected video preview' : 'attach selected reference')
+          confirmationMade = true
+        }
       }
       return false
     }, `photo processing finished and attached in prompt: ${name}`, 240000)
   }
   async function option(pattern, name) { const control = await wait(() => { const items = controls(pattern); return items.length === 1 ? items[0] : null }, name); click(control, name) }
+  const durationSetting = name => name.test('duration') || name.test('length')
+  function summaryDuration() {
+    const summary = generationSummary()[0]
+    return summary ? controlText(summary).match(/(?:^|[\s·•|])(\d+(?:\.\d+)?)\s*(?:s|seconds?)(?=$|[\s·•|])/i)?.[1] : undefined
+  }
   async function setting(name, value, pattern, root = document) {
-    const selects = [...root.querySelectorAll('select,[role="combobox"]')].filter(element => visible(element) && name.test(label(element)))
+    if (durationSetting(name) && settingRetained(root, name, pattern)) return
+    const selects = [...root.querySelectorAll('select,[role="combobox"],input[type="number"],input[type="range"]')].filter(element => visible(element) && name.test(label(element)))
     if (selects.length === 1) {
       const field = selects[0]
       if (field instanceof HTMLSelectElement) {
@@ -388,6 +552,18 @@
         const selected = one(match, value)
         field.value = selected.value; field.dispatchEvent(new Event('input', { bubbles: true })); field.dispatchEvent(new Event('change', { bubbles: true }))
         if (field.value !== selected.value) throw new Error(`Flow did not retain ${value}.`)
+      } else if (field instanceof HTMLInputElement) {
+        let number = parseFloat(value)
+        if (durationSetting(name)) {
+          const displayed = compact(field.getAttribute('aria-valuetext')).match(/^(\d+(?:\.\d+)?)\s*(?:s|seconds?)$/i)?.[1] ?? summaryDuration()
+          // Infer milliseconds only from the current numeric and displayed values.
+          // Bounds alone cannot identify the control's unit.
+          if (displayed && Number(displayed) > 0 && Number(field.value) / Number(displayed) === 1000) number *= 1000
+        }
+        if (!Number.isFinite(number) || field.min && number < Number(field.min) || field.max && number > Number(field.max)) throw new Error(`Flow does not offer ${value}. Nothing was submitted.`)
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(field, String(number))
+        field.dispatchEvent(new Event('input', { bubbles: true })); field.dispatchEvent(new Event('change', { bubbles: true }))
+        if (Number(field.value) !== number) throw new Error(`Flow did not retain ${value}.`)
       } else { click(field, value); await option(pattern, value) }
     } else {
       const direct = controls(pattern, root)
@@ -518,6 +694,80 @@
       return null
     }, 'Image/Video generation settings panel')
   }
+  const omniModel = /^(?:Gemini\s+)?Omni\s+(?:Flash\s+1\.2|1\.2\s+Flash)$/i
+  const selectedControl = element => ['true', 'active', 'checked', 'on'].includes(element.getAttribute('aria-selected') ?? element.getAttribute('aria-checked') ?? element.getAttribute('aria-pressed') ?? element.getAttribute('data-state'))
+  function currentModelControl(root) {
+    const candidates = [...root.querySelectorAll('select,[role="combobox"],button,[role="button"]')].filter(element => {
+      if (!visible(element) || element.matches('[role="option"],[role="menuitem"],[role="radio"]')) return false
+      const menu = element.closest('[role="menu"],[role="listbox"]')
+      if (menu && menu !== root && root.contains(menu)) return false
+      return /model/i.test(label(element)) && element.matches('select,[role="combobox"]') || /^(?:(?:Gemini\s+)?Omni\b|Veo\b|(?:select\s+)?(?:video\s+)?model$)/i.test(controlText(element))
+    })
+    const triggers = candidates.filter(element => element.matches('select,[role="combobox"]') || element.hasAttribute('aria-haspopup') || element.hasAttribute('aria-expanded') || glyphMatches(element, /^(?:expand_more|expand_less|arrow_drop_down|arrow_drop_up|keyboard_arrow_down)$/i))
+    return triggers.length === 1 ? triggers[0] : candidates.length === 1 ? candidates[0] : null
+  }
+  function currentModelText(root) {
+    const field = currentModelControl(root)
+    return field instanceof HTMLSelectElement ? compact(field.selectedOptions[0]?.textContent) : field ? controlText(field) : ''
+  }
+  function summarySetting(root, name) {
+    const summary = generationSummary()[0]
+    if (!summary) return ''
+    const text = controlText(summary)
+    if (name.test('resolution') || name.test('quality')) return text.match(/(?:^|[\s·•|])(\d{3,4}\s*p)(?=$|[\s·•|])/i)?.[1] ?? ''
+    if (name.test('outputs')) return text.match(/(?:^|[\s·•|])(x\s*[1-4])(?=$|[\s·•|])/i)?.[1] ?? ''
+    if (name.test('aspect ratio') || name.test('orientation')) {
+      const ratio = ratioValues(text)
+      if (ratio.length === 1) return ratio[0]
+      // The current toolbar uses an orientation icon instead of ratio text.
+      // Only map it when the settings explicitly offer these two video ratios.
+      const choices = [...new Set(controls(ratioPattern, root).flatMap(element => ratioValues(controlText(element))))]
+      if (choices.length === 2 && choices.includes('9:16') && choices.includes('16:9')) {
+        if (glyphMatches(summary, /^(?:crop_portrait|stay_current_portrait|smartphone)$/i)) return '9:16'
+        if (glyphMatches(summary, /^(?:crop_landscape|stay_current_landscape)$/i)) return '16:9'
+      }
+    }
+    return ''
+  }
+  function settingRetained(root, name, pattern) {
+    // A model dropdown's displayed value is its selection. Its trigger does
+    // not need aria-selected, which belongs to the choices inside the menu.
+    if (name.test('model')) return pattern.test(currentModelText(root))
+    const fields = [...root.querySelectorAll('select,[role="combobox"],input[type="number"],input[type="range"]')].filter(field => visible(field) && name.test(label(field)))
+    if (durationSetting(name)) {
+      const field = fields.length === 1 ? fields[0] : null
+      const formatted = field instanceof HTMLSelectElement ? compact(field.selectedOptions[0]?.textContent) : compact(field?.getAttribute('aria-valuetext'))
+      if (/^\d+(?:\.\d+)?\s*(?:s|seconds?)$/i.test(formatted)) return pattern.test(formatted)
+      const duration = summaryDuration()
+      if (duration !== undefined && pattern.test(`${duration}s`)) return true
+    }
+    if (fields.length === 1) {
+      const field = fields[0]
+      return pattern.test(field instanceof HTMLSelectElement ? compact(field.selectedOptions[0]?.textContent) : field instanceof HTMLInputElement ? `${field.value}s` : controlText(field))
+    }
+    return controls(pattern, root).some(selectedControl) || pattern.test(summarySetting(root, name)) || pattern.test(controlText(generationSummary()[0] || document.createElement('span')))
+  }
+  function closeGenerationSettings(panel) {
+    const save = controls(/^save$/i, panel)
+    if (save.length === 1) click(save[0], 'save generation settings')
+    else {
+      const close = controls(/^(?:close|done)$/i, panel)
+      if (close.length === 1) click(close[0], 'close generation settings')
+      else {
+        const summary = one(generationSummary(), 'generation settings summary')
+        if (summary.getAttribute('aria-expanded') !== 'false') click(summary, 'close generation settings')
+      }
+    }
+  }
+  async function checkSingleReelSettings() {
+    const panel = await openGenerationSettings()
+    const expected = [[/model/i, omniModel, 'Omni Flash 1.2'], [/resolution|quality/i, /^720\s*p$/i, '720p'], [/duration|length/i, /^15\s*(?:s|seconds?)$/i, '15 seconds'], [/aspect ratio|orientation/i, /^(?:.*\s)?9:16(?:\s.*)?$/, '9:16'], [/outputs|results per prompt|number of videos/i, /^(?:x\s*)?1(?:\s*(?:outputs?|videos?))?$/i, 'one clip']]
+    if (summaryOutput() !== 'reel' && !controls(/^videos?$/i, panel).some(selectedControl)) throw new Error('Flow did not retain Video mode. Nothing was submitted.')
+    for (const [name, pattern, value] of expected) {
+      if (!settingRetained(panel, name, pattern)) throw new Error(`Flow did not confirm ${value}. Nothing was submitted.`)
+    }
+    closeGenerationSettings(panel)
+  }
   async function configureGeneration(payload, ratio) {
     // A previous failed upload can leave the asset picker open. Its Images /
     // Videos navigation must never be used as generation settings.
@@ -552,7 +802,22 @@
     const selectedState = selected?.getAttribute('aria-selected') ?? selected?.getAttribute('aria-checked') ?? selected?.getAttribute('data-state')
     const summaryMode = summaryOutput() === payload.outputType
     if (!summaryMode && !['true', 'active', 'checked', 'on'].includes(selectedState)) throw new Error('Flow did not confirm the requested Image/Video mode. Nothing was submitted.')
-    const actualRatio = await applyRatio(ratio, panel)
+    if (payload.videoSettings) {
+      if (!settingRetained(panel, /model/i, omniModel)) {
+        const field = currentModelControl(panel)
+        if (field instanceof HTMLSelectElement) await setting(/model/i, 'Omni Flash 1.2', omniModel, panel)
+        else {
+          if (!field) throw new Error('Flow model dropdown could not be identified. Nothing was submitted.')
+          click(field, 'video model selector')
+          await option(omniModel, 'Omni Flash 1.2')
+        }
+      }
+      panel = await openGenerationSettings()
+      await wait(() => settingRetained(settingsPanels()[0] || panel, /model/i, omniModel), 'selected model dropdown showing Omni 1.2 Flash')
+      await setting(/resolution|quality/i, '720p', /^720\s*p$/i, panel)
+      panel = await openGenerationSettings()
+    }
+    const actualRatio = await applyRatio(ratio, panel, !!payload.videoSettings)
     panel = await openGenerationSettings()
     await setting(/outputs|results per prompt|number of images|number of videos/i, String(payload.outputs), new RegExp(`^(?:x\\s*)?${payload.outputs}(?:\\s*(?:outputs?|images?|videos?))?$`, 'i'), panel)
     if (payload.outputType === 'reel') {
@@ -564,31 +829,44 @@
     }
     // Keep the existing selected model: the app does not request a model change.
     // Requiring a visible Nano Banana/Veo button here caused the original bug.
-    const save = controls(/^save$/i, panel)
-    if (save.length === 1) click(save[0], 'save generation settings')
-    else {
-      const close = controls(/^(?:close|done)$/i, panel)
-      if (close.length === 1) click(close[0], 'close generation settings')
-      else {
-        const summary = one(generationSummary(), 'generation settings summary')
-        if (summary.getAttribute('aria-expanded') !== 'false') click(summary, 'close generation settings')
-      }
-    }
+    // This legacy behavior applies when no explicit videoSettings were requested.
+    closeGenerationSettings(panel)
+    if (payload.videoSettings) await checkSingleReelSettings()
     return actualRatio
+  }
+  function videoCard(element) {
+    if (element.querySelector('video') || element.matches('[data-media-type="video"],[data-type="video"]') || element.querySelector('[data-media-type="video"],[data-type="video"]')) return true
+    const playName = /^(?:play|play video|play clip|preview video|replay|pause|pause video|play_arrow|play_circle|play_circle_filled|play_circle_outline)$/i
+    if ([...element.querySelectorAll('button,[role="button"]')].some(button => visible(button) && playName.test(label(button)))) return true
+    return [...element.querySelectorAll(glyphSelector)].some(icon => {
+      if (!/^(?:play_arrow|play_circle|play_circle_filled|play_circle_outline)$/i.test(compact(icon.getAttribute('data-icon') || icon.getAttribute('aria-label') || icon.textContent))) return false
+      const button = icon.closest('button,[role="button"]')
+      // Video footers combine a play glyph with the generated clip title.
+      // That title is not a play-control label; the glyph identifies the type.
+      if (button) return visible(button)
+      return icon.checkVisibility() && !icon.closest('[role="dialog"],[role="menu"],[role="listbox"]')
+    })
   }
   function cards() {
     const result = new Map()
     for (const element of document.querySelectorAll('flow-grid-tile-container,[data-asset-id],[data-generation-id],article,[role="listitem"]')) {
       if (!visible(element)) continue
-      const video = element.querySelector('video'), img = element.querySelector('img')
+      const video = element.querySelector('video'), img = element.querySelector('img'), isVideo = videoCard(element)
       if (!video && !img) continue
       if (element.matches('flow-grid-tile-container')) {
-        const media = element.querySelector('[data-media-id]')
+        const media = element.matches('[data-media-id]') ? element : element.querySelector('[data-media-id]')
         const id = media?.getAttribute('data-media-id')
-        if (!id || !element.querySelector('button[aria-label="Reuse prompt"]')) continue
+        // Include uploaded media in the baseline too. Result ownership is
+        // established by its full prompt, not the hover toolbar's aria label.
+        if (!id) continue
         const busy = element.querySelector('[role="progressbar"],[aria-busy="true"]')
-        result.set(id, { id, selector: `flow-grid-tile-container:has([data-media-id="${CSS.escape(id)}"])`, kind: video ? 'reel' : 'post', native: true,
-          ready: !busy && (video ? video.readyState >= 2 : img.complete && img.naturalWidth > 0) })
+        // Flow can show a finished video as a loaded poster and play overlay.
+        // Playback metadata is lazy and must not gate result collection.
+        const posterReady = !!img?.complete && img.naturalWidth > 0
+        const videoReady = !!video && (video.readyState >= 1 || !!video.poster && !!element.querySelector('button[aria-label="More options"]'))
+        const selector = element.hasAttribute('data-media-id') ? `flow-grid-tile-container[data-media-id="${CSS.escape(id)}"]` : `flow-grid-tile-container:has([data-media-id="${CSS.escape(id)}"])`
+        result.set(id, { id, selector, kind: isVideo ? 'reel' : 'post', native: true,
+          ready: !busy && (isVideo ? posterReady || videoReady : posterReady) })
         continue
       }
       const attr = element.hasAttribute('data-asset-id') ? 'data-asset-id' : element.hasAttribute('data-generation-id') ? 'data-generation-id' : null
@@ -596,7 +874,7 @@
       const id = attr ? element.getAttribute(attr) : link?.getAttribute('href')
       if (!id) continue
       const selector = attr ? `[${attr}="${CSS.escape(id)}"]` : `article:has(a[href="${CSS.escape(id)}"]),[role="listitem"]:has(a[href="${CSS.escape(id)}"])`
-      result.set(id, { id, selector, prompt: compact(element.getAttribute('data-prompt') || element.innerText), kind: video ? 'reel' : 'post', ready: !!element.querySelector('a[download],button[aria-label*="download" i]') && !/generating|queued|processing/i.test(element.innerText) })
+      result.set(id, { id, selector, prompt: compact(element.getAttribute('data-prompt') || element.innerText), kind: isVideo ? 'reel' : 'post', ready: !!element.querySelector('a[download],button[aria-label*="download" i]') && !/generating|queued|processing/i.test(element.innerText) })
     }
     return [...result.values()]
   }
@@ -641,7 +919,12 @@
     const key = `${location.href}:${result.id}`
     if (resultPrompts.has(key)) return resultPrompts.get(key)
     const card = one([...document.querySelectorAll(result.selector)], 'matched result')
-    const footer = one([...card.querySelectorAll('button.footer-left')], 'result information')
+    const embedded = compact(card.getAttribute('data-prompt') || card.getAttribute('data-generation-prompt') || card.querySelector('[data-prompt]')?.getAttribute('data-prompt'))
+    if (embedded) { resultPrompts.set(key, embedded); return embedded }
+    const footers = [...card.querySelectorAll('button.footer-left')]
+    const named = [...card.querySelectorAll('button,[role="button"]')].filter(button => /^(?:view prompt|show prompt|generation details|view generation details|result information)$/i.test(label(button)))
+    if (!footers.length && !named.length) return ''
+    const footer = one(footers.length ? footers : named, 'result information')
     // Close an already open panel first: only read a panel opened for this ID.
     if ([...document.querySelectorAll('flow-info-panel')].some(visible)) {
       const expanded = [...document.querySelectorAll('flow-grid-tile-container button.footer-left[aria-expanded="true"]')]
@@ -685,6 +968,7 @@
   }
   async function execute(action, payload) {
     guard(payload.url)
+    await acceptUploadRightsDialog()
     if (action === 'uploadDiagnostic') return uploadDiagnostic()
     if (action === 'inspect') return { companionVersion: '0.1.6', adapterVersion: ADAPTER_VERSION, referenceCheck, url: location.href, title: document.title, ready: controls(/^(?:\+\s*|add\s*)?new project$/i).length === 1 || (/\/project\/[a-zA-Z0-9_-]+/.test(location.pathname) && [...document.querySelectorAll('textarea,[contenteditable="true"]')].some(visible)) }
     if (action === 'createProject') { click(one(controls(/^(?:\+\s*|add\s*)?new project$/i), 'New project'), 'New project'); return null }
@@ -728,8 +1012,20 @@
     }
     if (action === 'prepare') {
       if (!['post', 'reel'].includes(payload.outputType) || typeof payload.prompt !== 'string' || !payload.prompt.trim() || payload.prompt.length > 150000 || !Number.isInteger(payload.outputs) || payload.outputs < 1 || payload.outputs > 4) throw new Error('Invalid prepared generation settings.')
-      prepared = null
+      if (payload.videoSettings && (payload.outputType !== 'reel' || payload.videoSettings.model !== 'Omni Flash 1.2' || payload.videoSettings.resolution !== '720p' || payload.preset !== 'reel-vertical' || payload.outputs !== 1 || payload.sourceDuration !== 15 || payload.continuation)) throw new Error('A single reel requires Video, 9:16, Omni Flash 1.2, 720p, one clip and 15 seconds.')
+      const requestId = payload.requestId
+      if (requestId !== undefined && !/^[0-9a-f-]{36}$/i.test(requestId)) throw new Error('Invalid preparation request identifier.')
+      const manifest = payload.manifest || []
+      if (!Array.isArray(manifest) || manifest.length > 64 || new Set(manifest.map(item => item?.name)).size !== manifest.length || manifest.some(item => !item || typeof item.name !== 'string' || !item.name || item.name.length > 200 || /[\\/\0]/.test(item.name) || !['reference','startFrame'].includes(item.kind))) throw new Error('Invalid request reference manifest.')
+      const settingsKey = JSON.stringify({ outputType: payload.outputType, preset: payload.preset, sourceDuration: payload.sourceDuration ?? null, outputs: payload.outputs, continuation: !!payload.continuation, videoSettings: payload.videoSettings ?? null })
+      let saved = requestId && prepared?.checkpoint?.requestId === requestId ? prepared.checkpoint : undefined
+      if (!saved && requestId && chrome.storage?.local) saved = (await chrome.storage.local.get(preparationStorageKey(requestId)))[preparationStorageKey(requestId)]
+      if (!saved) saved = payload.checkpoint
+      if (saved && (saved.requestId !== requestId || saved.url !== location.href || saved.prompt !== payload.prompt || saved.settingsKey !== settingsKey || (!Array.isArray(saved.manifest) || saved.manifest.length !== manifest.length || saved.manifest.some((item, index) => !item || item.name !== manifest[index]?.name || item.kind !== manifest[index]?.kind)) || !Array.isArray(saved.assets) || saved.assets.length > manifest.length || saved.assets.some(asset => !manifest.some(item => item.name === asset.name && item.kind === asset.kind) || !['uploading','uploaded','attached'].includes(asset.stage) || asset.key !== undefined && !/^asset:[0-9a-f-]{36}$/i.test(asset.key)))) throw new Error('The resume checkpoint belongs to different request data. Existing uploads were preserved.')
+      const checkpoint = requestId ? saved || { requestId, url: location.href, prompt: payload.prompt, settingsKey, manifest, assets: [], attachmentsCleared: !!payload.resumePreparation } : undefined
+      prepared = { url: location.href, prompt: payload.prompt, requestId, checkpoint, files: [], startFrame: false, assets: new Map((checkpoint?.assets || []).filter(asset => asset.key).map(asset => [asset.name, asset.key])), videoSettings: payload.videoSettings }
       submission = null
+      await persistPreparation()
       failedBefore.set(`${location.href}:${compact(payload.prompt)}`,new Set(document.querySelectorAll('flow-grid-tile-container,[data-generation-id]')))
       if(failedBefore.size>100)failedBefore.delete(failedBefore.keys().next().value)
       await closeStaleMenus()
@@ -738,31 +1034,53 @@
       }, 'project prompt editor ready', 25000)
       const ratio = { 'post-square': '1:1', 'post-portrait': '4:5', 'post-tall': '3:4', 'post-landscape': '1.91:1', 'post-story': '9:16', 'reel-vertical': '9:16', 'reel-landscape': '16:9' }[payload.preset]
       if (!ratio) throw new Error('Invalid export preset.')
-      let actualRatio = ratio
-      if (generationSummary().length || controls(/^agent$/i).length) actualRatio = await configureGeneration(payload, ratio)
-      else {
-        await option(payload.outputType === 'post' ? /^image$/i : /^video$/i, 'output mode')
-        if (payload.outputType === 'reel') await option(payload.continuation ? /^frames$/i : /^ingredients$/i, 'video reference mode')
-        actualRatio = await applyRatio(ratio, document)
-        await setting(/outputs|results per prompt|number of images|number of videos/i, String(payload.outputs), new RegExp(`^(?:x\\s*)?${payload.outputs}(?:\\s*(?:outputs?|images?|videos?))?$`, 'i'))
-        if (payload.outputType === 'reel') await setting(/duration|length/i, `${payload.sourceDuration}s`, new RegExp(`^${payload.sourceDuration}\\s*(?:s|seconds?)$`, 'i'))
+      let actualRatio = checkpoint?.sourceRatio || ratio
+      let settingsDone = !!checkpoint?.settingsDone
+      if (settingsDone && payload.videoSettings) {
+        try { await checkSingleReelSettings() }
+        catch (error) {
+          if (!/Flow did not confirm (?:Video mode|Omni|720p|15 seconds|9:16|one clip)/i.test(error.message)) throw error
+          settingsDone = false
+        }
+      } else if (settingsDone) {
+        const panel = await openGenerationSettings()
+        settingsDone = summaryOutput() === payload.outputType && settingRetained(panel, /aspect ratio|orientation/i, new RegExp(`^${actualRatio}$`)) && settingRetained(panel, /outputs|results per prompt|number of images|number of videos/i, new RegExp(`^(?:x\\s*)?${payload.outputs}$`, 'i'))
+        if (payload.outputType === 'reel') settingsDone = settingsDone && settingRetained(panel, /duration|length/i, new RegExp(`^${payload.sourceDuration}\\s*(?:s|seconds?)$`, 'i'))
+        closeGenerationSettings(panel)
       }
-      const remove = () => {const area=composer();return [...new Set([
-        ...controls(/^remove(?: reference| image| attachment)?(?:\s.*)?$/i, area),
-        ...[...area.querySelectorAll('button[aria-label="Ingredient"]')].filter(button => visible(button) &&
-          [...button.querySelectorAll('mat-icon')].some(icon => /^cancel$/i.test(compact(icon.textContent)))),
-      ])]}
-      for (let i = 0; remove().length && i < 60; i++) { click(remove()[0], 'remove old prompt attachment'); await new Promise(resolve => setTimeout(resolve, 100)) }
-      if (remove().length) throw new Error('Old prompt attachments could not be cleared safely.')
-      const editor=promptEditor()
-      const editNonce=crypto.randomUUID();editor.setAttribute('data-frame-edit',editNonce)
-      try {
-        const edit=await chrome.runtime.sendMessage({type:'frame-flow-edit-prompt',nonce:editNonce,prompt:payload.prompt})
-        if(!edit?.ok || edit.value?.retained!==true) throw new Error(edit?.error || 'Flow did not confirm prompt editing. Nothing was submitted.')
-      } finally {editor.removeAttribute('data-frame-edit')}
-      if (compact(promptText(editor)) !== compact(payload.prompt)) throw new Error('The complete prompt was not retained in Flow.')
-      prepared = { url: location.href, prompt: payload.prompt, files: [], startFrame: false, assets: new Map() }
-      return { sourceRatio: actualRatio, targetRatio: ratio, automaticCrop: actualRatio !== ratio }
+      if (!settingsDone) {
+        if (generationSummary().length || controls(/^agent$/i).length) actualRatio = await configureGeneration(payload, ratio)
+        else {
+          if (payload.videoSettings) throw new Error('Flow does not expose verifiable single-reel settings. Nothing was submitted.')
+          await option(payload.outputType === 'post' ? /^image$/i : /^video$/i, 'output mode')
+          if (payload.outputType === 'reel') await option(payload.continuation ? /^frames$/i : /^ingredients$/i, 'video reference mode')
+          actualRatio = await applyRatio(ratio, document)
+          await setting(/outputs|results per prompt|number of images|number of videos/i, String(payload.outputs), new RegExp(`^(?:x\\s*)?${payload.outputs}(?:\\s*(?:outputs?|images?|videos?))?$`, 'i'))
+          if (payload.outputType === 'reel') await setting(/duration|length/i, `${payload.sourceDuration}s`, new RegExp(`^${payload.sourceDuration}\\s*(?:s|seconds?)$`, 'i'))
+        }
+        if (checkpoint) { checkpoint.settingsDone = true; checkpoint.sourceRatio = actualRatio; checkpoint.targetRatio = ratio; await persistPreparation() }
+      }
+      if (!checkpoint?.attachmentsCleared) {
+        const remove = () => {const area=composer();return [...new Set([
+          ...controls(/^remove(?: reference| image| attachment)?(?:\s.*)?$/i, area),
+          ...[...area.querySelectorAll('button[aria-label="Ingredient"]')].filter(button => visible(button) &&
+            [...button.querySelectorAll('mat-icon')].some(icon => /^cancel$/i.test(compact(icon.textContent)))),
+        ])]}
+        for (let i = 0; remove().length && i < 60; i++) { click(remove()[0], 'remove old prompt attachment'); await new Promise(resolve => setTimeout(resolve, 100)) }
+        if (remove().length) throw new Error('Old prompt attachments could not be cleared safely.')
+        if (checkpoint) { checkpoint.attachmentsCleared = true; await persistPreparation() }
+      }
+      if (compact(promptText(promptEditor())) !== compact(payload.prompt)) {
+        const editor=promptEditor()
+        const editNonce=crypto.randomUUID();editor.setAttribute('data-frame-edit',editNonce)
+        try {
+          const edit=await chrome.runtime.sendMessage({type:'frame-flow-edit-prompt',nonce:editNonce,prompt:payload.prompt})
+          if(!edit?.ok || edit.value?.retained!==true) throw new Error(edit?.error || 'Flow did not confirm prompt editing. Nothing was submitted.')
+        } finally {editor.removeAttribute('data-frame-edit')}
+        if (compact(promptText(editor)) !== compact(payload.prompt)) throw new Error('The complete prompt was not retained in Flow.')
+      }
+      if (checkpoint) { checkpoint.promptDone = true; await persistPreparation() }
+      return { sourceRatio: actualRatio, targetRatio: ratio, automaticCrop: actualRatio !== ratio, checkpoint }
     }
     // Developer upload-only verification uses the same attach implementation,
     // preserves the live prompt/settings and clears its state before returning.
@@ -773,29 +1091,49 @@
       try { await execute('attach',payload); return {attached:true,assetMatched:!!prepared.assets.get(payload.file.name)} }
       finally { prepared = null }
     }
+    if (action === 'referenceState') {
+      if (payload.requestId && prepared?.requestId !== payload.requestId) throw new Error('The active preparation belongs to a different request.')
+      return referenceState(payload.name, payload.kind)
+    }
     if (action === 'attach') {
-      if (!prepared || prepared.url !== location.href) throw new Error('Prepare this project before attaching files.')
+      if (!prepared || prepared.url !== location.href || payload.requestId && prepared.requestId !== payload.requestId) throw new Error('Prepare this saved request before attaching files.')
       const file = payload.file
-      if (!file || typeof file.name !== 'string' || file.name.length > 200 || /[\\/]/.test(file.name) || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || typeof file.base64 !== 'string' || file.base64.length > 28_000_000) throw new Error('Invalid reference image payload.')
-      if(attachmentPresent(file.name)){if(!prepared.files.includes(file.name))prepared.files.push(file.name);return null}
-      const area = composer()
-      if (payload.kind === 'startFrame') click(one(controls(/^(?:\+\s*)?add start frame$/i, area), 'Add start frame'), 'Add start frame')
-      const input = await openReferenceInput(area, file.name)
-      if (input) {
-        const nonce=crypto.randomUUID()
-        input.setAttribute('data-frame-upload',nonce)
-        try {
-          const result=await chrome.runtime.sendMessage({type:'frame-flow-main-upload',nonce,file})
-          if(!result?.ok || result.value?.assigned!==true) throw new Error(result?.error || 'The Flow page-context upload could not be confirmed.')
-        } finally {input.removeAttribute('data-frame-upload')}
+      if (!file || typeof file.name !== 'string' || !file.name || file.name.length > 200 || /[\\/\0]/.test(file.name)) throw new Error('Invalid reference filename.')
+      const state = await referenceState(file.name, payload.kind)
+      if (state.attached) return state
+      if (payload.kind === 'startFrame') click(one(controls(/^(?:\+\s*)?add start frame$/i, composer()), 'Add start frame'), 'Add start frame')
+      if (!state.known) {
+        if (!['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/quicktime', 'video/webm'].includes(file.type) || typeof file.base64 !== 'string' || file.base64.length > 28_000_000) throw new Error('Invalid reference media payload.')
+        referenceMediaType = file.type
+        const input = await openReferenceInput(composer(), file.name)
+        if (input) {
+          const nonce = crypto.randomUUID()
+          input.setAttribute('data-frame-upload', nonce)
+          // Persist upload intent before assigning bytes. A lost acknowledgement
+          // resumes observation of this upload instead of sending it twice.
+          rememberReference(file.name, payload.kind, 'uploading')
+          await persistPreparation()
+          try {
+            const result = await chrome.runtime.sendMessage({ type: 'frame-flow-main-upload', nonce, file })
+            if (!result?.ok || result.value?.assigned !== true) throw new Error(result?.error || 'The Flow page-context upload could not be confirmed. Its upload intent was saved; resume this reference without repeating completed uploads.')
+          } finally { input.removeAttribute('data-frame-upload') }
+        } else {
+          rememberReference(file.name, payload.kind, 'uploaded')
+          await persistPreparation()
+        }
       }
+      if (state.known) await showExistingReference(file.name)
       await confirmReference(file.name)
-      prepared.files.push(file.name); if (payload.kind === 'startFrame') prepared.startFrame = true
-      return null
+      if (!prepared.files.includes(file.name)) prepared.files.push(file.name)
+      if (payload.kind === 'startFrame') prepared.startFrame = true
+      rememberReference(file.name, payload.kind, 'attached')
+      return { checkpoint: await persistPreparation() }
     }
     if (action === 'baseline' || action === 'armSubmit') {
       if (!prepared || prepared.url !== location.href || compact(promptText(promptEditor())) !== compact(prepared.prompt)) throw new Error('The prepared prompt changed; nothing was submitted.')
       for (const name of prepared.files) if (!attachmentPresent(name)) throw new Error('A prepared reference is no longer attached. Nothing was submitted.')
+      if (prepared.checkpoint) reconcileReferenceSet(action === 'baseline')
+      if (prepared.videoSettings) await checkSingleReelSettings()
       if (action === 'baseline') {
         if (prepared.files.length !== payload.references + (payload.startFrame ? 1 : 0) || prepared.startFrame !== payload.startFrame) throw new Error('The project reference count does not match the attached Flow references.')
         // A prior request may still occupy Flow's account/UI capacity. Wait
@@ -818,6 +1156,7 @@
       if (submit.disabled || submit.getAttribute('aria-disabled') === 'true') throw new Error('Flow Start generation is disabled. Nothing was submitted.')
       const submitNonce=crypto.randomUUID()
       submission = { nonce: submitNonce, url: location.href, area, existingIds, existingProgress, armedAt: Date.now() }
+      if (prepared.checkpoint && chrome.storage?.local) await chrome.storage.local.remove(preparationStorageKey(prepared.checkpoint.requestId)).catch(() => {})
       prepared = null
       return { nonce: submitNonce, title: document.title }
     }
@@ -827,6 +1166,7 @@
       submission = null
       const deadline = Date.now() + 45000
       while (Date.now() < deadline) {
+        await acceptUploadRightsDialog()
         const rejection = [...document.querySelectorAll('[role="alert"],.mat-mdc-snack-bar-label')].filter(visible).map(element => compact(element.textContent)).join(' ')
         if (/failed|unable|error|limit|not enough|too many|try again|maximum|couldn.t|cannot/i.test(rejection)) throw new Error(`Flow rejected submission: ${rejection.slice(0, 350)}. No automatic retry was made.`)
         const editors = [...document.querySelectorAll('textarea,[contenteditable="true"]')].filter(visible)
@@ -846,14 +1186,20 @@
         return compact(saved)===compact(payload.prompt)
       })
       if(failed)throw new Error(`Flow generation failed: ${compact(failed.textContent).slice(0,350)}. Other products can continue; this request is not automatically resubmitted.`)
-      const results = []
-      for (const item of cards().filter(item => item.ready && item.kind === payload.outputType && !payload.baseline.includes(item.id))) {
+      const results = [], observed = cards()
+      const candidates = observed.filter(item => item.kind === payload.outputType && !payload.baseline.includes(item.id))
+      let missingPrompt = 0, differentPrompt = 0
+      for (const item of candidates.filter(item => item.ready)) {
         let prompt
         try { prompt = await resultPrompt(item) }
-        catch (error) { if (/^Flow result prompt is not available yet\./.test(error.message)) continue; throw error }
+        catch (error) { if (/^Flow result prompt is not available yet\./.test(error.message)) { missingPrompt++; continue }; throw error }
         if (item.native ? prompt === compact(payload.prompt) : prompt.includes(compact(payload.prompt))) results.push({ id: item.id, selector: item.selector })
+        else if (!prompt) missingPrompt++
+        else differentPrompt++
       }
-      return results
+      const ready = candidates.filter(item => item.ready).length
+      const diagnostic = `${candidates.length} new ${payload.outputType === 'reel' ? 'video' : 'image'} card(s), ${ready} ready, ${missingPrompt} without a readable full prompt, ${differentPrompt} with a different prompt.`
+      return { results, diagnostic }
     }
     if (action === 'downloadOriginal') {
       const result = cards().find(item => item.id === payload.result?.id && item.ready && item.native)

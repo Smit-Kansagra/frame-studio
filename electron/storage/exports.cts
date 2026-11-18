@@ -10,9 +10,12 @@ import { transaction } from './database.cjs'
 import { StorageError } from './errors.cjs'
 import { ManagedPaths, UUID_PATTERN } from './paths.cjs'
 import { outputSizes } from './output-policy.mjs'
+import { isSingleReel } from './reel-plan.mjs'
 import { postPhotos } from './post-plan.mjs'
 import { validResultPath } from './result-paths.cjs'
 import {logoQueue,type LogoProgress} from '../media/logo-queue.cjs'
+import { mediaTool } from '../media/media-tools.cjs'
+import { findVideoLogo } from '../media/video-logo.cjs'
 
 type Probe = { duration: number; width: number; height: number; hasAudio: boolean; size: number }
 type ToolInfo = { available: boolean; message: string; encoder: 'libx264' | 'mpeg4' | null; hasAac: boolean }
@@ -23,7 +26,7 @@ function record(row: ExportRow): ExportRecord { return { id: row.id, projectId: 
 
 function capture(command: string, args: string[], timeout = 5000): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(command === 'ffmpeg' || command === 'ffprobe' ? mediaTool(command) : command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     let output = '', error = '', settled = false
     const timer = setTimeout(() => { child.kill(); finish(new Error('The local media tool did not respond in time.')) }, timeout)
     const finish = (cause?: Error) => { if (settled) return; settled = true; clearTimeout(timer); cause ? reject(cause) : resolve(output) }
@@ -51,14 +54,27 @@ export class Exports {
       return target
     }
     const media = await this.probe(source)
-    if (Math.abs(media.width / media.height - size.width / size.height) < 0.002) return source
     const tools = await this.tools()
     if (!tools.available) invalid(tools.message)
-    const target = path.join(directory, `${randomUUID()}.mp4`)
-    await capture('ffmpeg', ['-hide_banner', '-nostdin', '-n', '-loglevel', 'error', '-i', source, '-map', '0:v:0', '-map', '0:a?', '-vf', `scale=${size.width}:${size.height}:force_original_aspect_ratio=increase,crop=${size.width}:${size.height},setsar=1`, '-c:v', tools.encoder!, ...(tools.encoder === 'libx264' ? ['-preset', 'veryfast', '-crf', '20'] : ['-q:v', '3']), '-c:a', 'aac', '-movflags', '+faststart', target], 10 * 60_000)
-    const result = await this.probe(target)
-    if (result.width !== size.width || result.height !== size.height) invalid('Automatic video crop did not produce the theme dimensions.')
-    return target
+    const frames = [Math.min(.2, media.duration / 4), media.duration / 2, Math.max(0, media.duration - .2)].map(() => path.join(directory, `${randomUUID()}.png`))
+    try {
+      onCleanup?.('Video downloaded. Checking the visible Gemini logo in three frames locally.', false)
+      const positions = [Math.min(.2, media.duration / 4), media.duration / 2, Math.max(0, media.duration - .2)]
+      for (let index = 0; index < frames.length; index++) await capture('ffmpeg', ['-hide_banner', '-nostdin', '-n', '-loglevel', 'error', '-ss', String(positions[index]), '-i', source, '-frames:v', '1', frames[index]], 30_000)
+      const region = await findVideoLogo(frames)
+      const fit = Math.abs(media.width / media.height - size.width / size.height) >= .002
+      if (!region && !fit) { onCleanup?.('No supported visible Gemini logo confidently detected. Saving the original video.', false); return source }
+      const filters: string[] = []
+      if (region) filters.push(`delogo=x=${region.left}:y=${region.top}:w=${region.width}:h=${region.height}:show=0`)
+      if (fit) filters.push(`scale=${size.width}:${size.height}:force_original_aspect_ratio=increase,crop=${size.width}:${size.height},setsar=1`)
+      onCleanup?.(region ? 'Cleaning the detected visible Gemini logo across the video while preserving audio.' : 'Applying the theme aspect ratio to the downloaded video.', false)
+      const target = path.join(directory, `${randomUUID()}.mp4`)
+      await capture('ffmpeg', ['-hide_banner', '-nostdin', '-n', '-loglevel', 'error', '-i', source, '-map', '0:v:0', '-map', '0:a?', '-vf', filters.join(','), '-c:v', tools.encoder!, ...(tools.encoder === 'libx264' ? ['-preset', 'veryfast', '-crf', '18'] : ['-q:v', '3']), '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-movflags', '+faststart', target], 10 * 60_000)
+      const result = await this.probe(target)
+      if (result.width !== (fit ? size.width : media.width) || result.height !== (fit ? size.height : media.height) || Math.abs(result.duration - media.duration) > .1 || media.hasAudio && !result.hasAudio) invalid('The cleaned video did not retain its dimensions, duration or audio. The original download is preserved.')
+      onCleanup?.(region ? 'Visible Gemini logo cleaned locally. Saving the video into the project.' : 'Theme aspect ratio applied. Saving the video into the project.', !!region)
+      return target
+    } finally { await Promise.all(frames.map(frame => rm(frame, { force: true }).catch(() => {}))) }
   }
   private child: ChildProcess | undefined
   private runningProject: string | undefined
@@ -106,7 +122,7 @@ export class Exports {
   async inspect(projectId: string): Promise<ExportPlan> {
     if (!UUID_PATTERN.test(projectId)) invalid('The project identifier is invalid.')
     const project = await this.project(projectId), tools = project.outputType === 'reel' ? await this.tools() : { available: true, message: 'Post export uses the local image processor; FFmpeg is not required.', encoder: null, hasAac: false }
-    const attempts = await this.attempts(projectId), reviews = await this.reviewsFor(projectId), size = presetSize[project.preset]
+    const attempts = await this.attempts(projectId), reviews = await this.reviewsFor(projectId), size = isSingleReel(project) ? { width: 720, height: 1280 } : presetSize[project.preset]
     const specs = project.outputType === 'post' ? postPhotos(project).map(photo => ({ sceneId: photo.id, name: photo.name })) : project.storyboard.scenes.map(scene => ({ sceneId: scene.id, name: scene.name }))
     const reasons: string[] = [], scenes: ExportSceneInfo[] = []
     if (project.outputType === 'reel' && !tools.available) reasons.push(tools.message)
@@ -280,7 +296,7 @@ export class Exports {
 
   private async encode(args: string[], projectId: string, duration: number, progress: (value: ExportProgress) => void) {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn('ffmpeg', args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+      const child = spawn(mediaTool('ffmpeg'), args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
       this.child = child
       let stdout = '', stderr = '', settled = false
       const finish = (error?: Error) => { if (settled) return; settled = true; error ? reject(error) : resolve() }
