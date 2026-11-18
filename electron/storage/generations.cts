@@ -306,6 +306,10 @@ export class Generations {
     if (sceneIndex < 0 && !(project.outputType === 'post' && postPhotos(project).some(item => item.id === sceneId))) invalid('Choose a scene or product photo from this saved project.')
     const attempt = this.row(attemptId)
     if (attempt.project_id !== projectId || attempt.scene_id !== sceneId || attempt.state !== 'ready-for-review') invalid('Choose an imported result for this scene before reviewing it.')
+    if (status === 'approved' && attempt.output_type === 'reel') {
+      const job = this.db.prepare('SELECT content FROM flow_jobs WHERE attempt_id=?').get(attemptId) as { content: string } | undefined
+      if (job && (JSON.parse(job.content) as FlowJob).reelCleanupPending) invalid('Wait for local video cleanup before approving this clip.')
+    }
     const previous = this.db.prepare('SELECT selected_attempt_id, status FROM scene_reviews WHERE project_id = ? AND scene_id = ?').get(projectId, sceneId) as { selected_attempt_id: string | null; status: string } | undefined
     const now = new Date().toISOString()
     transaction(this.db, () => {
@@ -332,6 +336,30 @@ export class Generations {
   }
   async importResult(id: string, source: string): Promise<GenerationAttempt> {
     return this.copyResult(id, source, 'submission-uncertain')
+  }
+  async replaceWithCleanReel(id: string, cleaned: string): Promise<void> {
+    const attempt = this.get(id)
+    const original = (await this.resultFile(id)).path
+    if (cleaned === original) return
+    if (attempt.outputType !== 'reel' || path.extname(cleaned).toLowerCase() !== '.mp4') invalid('Choose a processed MP4 for this saved reel.')
+    const target = path.join(path.dirname(original), `${id}.mp4`)
+    const relative = path.relative(this.paths.root, target).replaceAll('\\', '/')
+    const staged = path.join(path.dirname(original), `${randomUUID()}.importing`)
+    await this.project(attempt.projectId)
+    try {
+      await copyFile(cleaned, staged)
+      await this.project(attempt.projectId)
+      // Replace the original only after the complete, validated file is staged.
+      if (target === original) await rename(staged, target)
+      else await link(staged, target)
+      try {
+        this.db.prepare('UPDATE generation_attempts SET result_path=?, updated_at=? WHERE id=? AND state=?').run(relative, new Date().toISOString(), id, 'ready-for-review')
+      } catch (error) {
+        if (target !== original) await rm(target, { force: true }).catch(() => {})
+        throw error
+      }
+      if (target !== original) await rm(original, { force: true }).catch(() => {})
+    } finally { await rm(staged, { force: true }).catch(() => {}) }
   }
   private async copyResult(id: string, source: string, expectedState: 'submission-uncertain' | 'failed'): Promise<GenerationAttempt> {
     const row = this.row(id)

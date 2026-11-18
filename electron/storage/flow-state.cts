@@ -19,7 +19,7 @@ export class FlowState {
       if(job.retryQueued){if(attempt.state==='queued')this.db.prepare("UPDATE generation_attempts SET state='failed' WHERE id=?").run(job.attemptId);this.saveJob({...job,retryQueued:false,stage:'needs-attention',message:'The queued resume was interrupted. Use Resume request to continue its saved preparation checkpoint.'});continue}
       if(attempt.state==='queued'&&job.stage==='needs-attention'&&!job.submittedAt&&!job.submissionAcknowledged)this.db.prepare("UPDATE generation_attempts SET state='failed' WHERE id=?").run(job.attemptId)
       if (['complete', 'needs-attention'].includes(job.stage)) continue
-      if (attempt.state === 'ready-for-review') this.saveJob({ ...job, stage: 'complete', message: 'Downloaded results recovered after restart.' })
+      if (attempt.state === 'ready-for-review') this.saveJob({ ...job, stage: job.reelCleanupPending ? 'downloading' : 'complete', message: job.reelCleanupPending ? 'Reel saved in Clips. Local logo cleanup will resume.' : 'Downloaded results recovered after restart.' })
       else {
         if (attempt.state === 'queued') this.db.prepare("UPDATE generation_attempts SET state = 'failed' WHERE id = ?").run(job.attemptId)
         this.saveJob({ ...job, activity: interruptActivity(job.activity, 'Interrupted while Frame Studio was closing. Completion of this step was not confirmed.'), stage: 'needs-attention', message: attempt.state === 'queued' ? 'Preparation was interrupted before submission. Use Resume request to continue its saved checkpoint; completed uploads are retained.' : 'Interrupted Flow request. Resume result collection to inspect the same job; no automatic resubmission.' })
@@ -64,6 +64,10 @@ export class FlowState {
   }
   pendingCollection(): FlowJob[] {
     return (this.db.prepare("SELECT j.content FROM flow_jobs j JOIN generation_attempts a ON a.id=j.attempt_id JOIN projects p ON p.id=j.project_id WHERE a.state='submission-uncertain' AND p.trashed_at IS NULL ORDER BY j.rowid").all() as { content: string }[]).map(row => JSON.parse(row.content) as FlowJob).filter(job => !!job.projectUrl && !job.abandoned && !job.collectionStopped)
+  }
+  pendingReelCleanup(): FlowJob[] {
+    return (this.db.prepare("SELECT j.content FROM flow_jobs j JOIN generation_attempts a ON a.id=j.attempt_id JOIN projects p ON p.id=j.project_id WHERE a.state='ready-for-review' AND a.output_type='reel' AND p.trashed_at IS NULL AND json_extract(j.content,'$.reelCleanupPending')=1").all() as { content: string }[])
+      .map(row => JSON.parse(row.content) as FlowJob).filter(job => !job.abandoned)
   }
   queuedEdits():FlowJob[]{return (this.db.prepare("SELECT j.content FROM flow_jobs j JOIN generation_attempts a ON a.id=j.attempt_id JOIN projects p ON p.id=j.project_id WHERE a.state='queued' AND p.trashed_at IS NULL ORDER BY j.rowid").all() as {content:string}[]).map(row=>JSON.parse(row.content) as FlowJob).filter(job=>job.editQueued&&!job.abandoned)}
   saveJob(value: FlowJob): FlowJob {

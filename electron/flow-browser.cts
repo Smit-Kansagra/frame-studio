@@ -7,7 +7,7 @@ import { StorageError } from './storage/errors.cjs'
 import { FLOW_HOME, isFlowProject } from './flow-urls.cjs'
 export { FLOW_HOME, isFlowProject } from './flow-urls.cjs'
 export type FlowRequest = Pick<GenerationAttempt, 'outputType' | 'prompt' | 'preset' | 'sourceDuration'> & { files: string[]; outputs: number; startFrame?: string; referenceLabels?: string[]; requestId?: string; resumePreparation?: boolean; checkpoint?: FlowPreparationCheckpoint; onCheckpoint?: (value: FlowPreparationCheckpoint) => void; videoSettings?: { model: 'Omni Flash 1.2'; resolution: '720p' } }
-export type RemoteResult = { id: string; selector: string }
+export type RemoteResult = { id: string; selector: string; originalVideo?: true }
 function attention(message: string): never { throw new StorageError('INVALID_REQUEST', message) }
 
 /** Visible, ordinary Chrome UI only. No private APIs, cookie extraction, stealth,

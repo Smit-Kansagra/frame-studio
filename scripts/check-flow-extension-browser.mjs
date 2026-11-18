@@ -1,7 +1,8 @@
 // Chrome-only regression checks. All Flow URLs are intercepted locally; no
 // Google account, network generation, Frame Studio DB or user profile is used.
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, stat } from 'node:fs/promises'
+import path from 'node:path'
 import { chromium } from 'playwright'
 
 const content = await readFile('extension/content.js', 'utf8')
@@ -499,6 +500,7 @@ try {
         const tile=document.createElement('flow-grid-tile-container');tile.style.display='block'
         tile.innerHTML=`<img width="16" height="16" data-media-id="${id}" src="${image}"><button class="footer-left" aria-expanded="false">A short title</button>${generated?'<button aria-label="Reuse prompt">redo</button>':''}<button aria-label="More options">more_vert</button>`
         tile.querySelector('.footer-left').onclick=e=>{
+          if (!generated) return
           const open=e.currentTarget.getAttribute('aria-expanded')==='true'
           document.querySelector('flow-info-panel')?.remove();e.currentTarget.setAttribute('aria-expanded',String(!open))
           if(!open){const panel=document.createElement('flow-info-panel');panel.innerHTML='<div class="prompt-text"></div>';panel.querySelector('div').textContent=prompt;document.body.append(panel)}
@@ -515,14 +517,132 @@ try {
       }
     })
     await page.locator('flow-grid-tile-container img').last().evaluate(image=>image.decode())
-    const result=await command(page,'results',{url,prompt:'exact prompt',outputType:'post',baseline:['old']})
-    assert.equal(result.ok,true,result.error);assert.deepEqual(result.value.map(item=>item.id),['new'])
+    const result=await command(page,'results',{url,prompt:'exact prompt',outputType:'post',baseline:['old','upload']})
+    assert.equal(result.ok,true,result.error);assert.deepEqual(result.value.results.map(item=>item.id),['new'])
     assert.equal(await page.locator('flow-info-panel').count(),0)
-    assert.deepEqual((await command(page,'downloadLink',{url,result:result.value[0]})).value,{mode:'native-menu',title:''})
-    const downloaded=await command(page,'downloadOriginal',{url,result:result.value[0]})
+    assert.deepEqual((await command(page,'downloadLink',{url,result:result.value.results[0]})).value,{mode:'native-menu',title:'A short title'})
+    const downloaded=await command(page,'downloadOriginal',{url,result:result.value.results[0]})
     assert.equal(downloaded.ok,true,downloaded.error)
     const state=await page.evaluate(()=>window.fixture)
     assert.equal(state.originalDownloads,1);assert.equal(state.upscales,0);assert.equal(state.submissions,0)
+  })
+  await check('Reel poster inside a boxless grid tile downloads the 720p original through Clips', async page => {
+    const prompt = 'Saved reel prompt'
+    const mediaId = 'e7414b4c-d8a0-4afb-b718-dce5267cad07'
+    const sample = process.argv[3]
+    if (sample) await page.route('**/fixture-720p.mp4', route => route.fulfill({ path: path.resolve(sample), contentType: 'video/mp4' }))
+    await page.evaluate(({ prompt, mediaId }) => {
+      const tile = document.createElement('flow-grid-tile-container')
+      tile.style.display = 'contents'
+      tile.innerHTML = `
+        <div data-media-id="${mediaId}" style="width:180px;height:320px;background:#555">
+          <svg width="24" height="24" aria-hidden="true"><path d="M6 4L18 12L6 20Z"/></svg>
+          <button class="footer-left">Clothing showcase</button>
+          <button aria-label="More options">More</button>
+        </div>`
+      tile.querySelector('.footer-left').onclick = () => {
+        const panel = document.createElement('flow-info-panel')
+        panel.innerHTML = '<button aria-label="Close">Close</button><div class="prompt-text"></div>'
+        panel.querySelector('button').onclick = () => panel.remove()
+        panel.querySelector('.prompt-text').textContent = prompt
+        document.body.append(panel)
+      }
+      tile.querySelector('[aria-label="More options"]').onclick = () => {
+        const menu = document.createElement('div')
+        menu.setAttribute('role', 'menu')
+        menu.innerHTML = '<button role="menuitem">Download</button>'
+        const submenu = () => {
+          menu.innerHTML = '<button role="menuitem"><span>270p</span><span>Animated GIF</span></button><button role="menuitem"><span>720p</span><span>Original size</span></button><button role="menuitem">1080p Upscaled</button>'
+          menu.querySelectorAll('button')[1].onclick = async () => {
+            window.fixture.originalDownloads = (window.fixture.originalDownloads || 0) + 1
+            menu.remove()
+            if (!window.fixture.actualDownload) return
+            const response = await fetch('fixture-720p.mp4')
+            const link = document.createElement('a')
+            link.href = URL.createObjectURL(await response.blob())
+            link.download = 'Clothing_showcase_' + mediaId.slice(0,8) + '.mp4'
+            document.body.append(link)
+            link.click()
+            link.remove()
+          }
+        }
+        menu.querySelector('button').onmouseenter = submenu
+        document.body.append(menu)
+      }
+      const header = document.createElement('div')
+      header.className = 'header-title'
+      header.onclick = () => document.querySelector('[role="menu"]')?.remove()
+      document.body.append(header, tile)
+    }, { prompt, mediaId })
+    const result = await command(page, 'results', {url, prompt, outputType:'reel', baseline:[]})
+    assert.equal(result.ok, true, result.error)
+    assert.deepEqual(result.value.results.map(item => item.id), [mediaId])
+    assert.equal(await page.evaluate(() => window.fixture.originalDownloads || 0), 0)
+    if (sample) {
+      const { Workspace } = await import('../dist-electron/storage/workspace.cjs')
+      const { singleReelStoryboard } = await import('../dist-electron/storage/reel-plan.mjs')
+      const { FlowCoordinator } = await import('../dist-electron/flow-coordinator.cjs')
+      const { FlowResultFiles } = await import('../dist-electron/flow-result-files.cjs')
+      const { default: sharp } = await import('sharp')
+      const workspaceRoot = path.resolve(await mkdtemp('.verification/reel-e2e-'))
+      const ws = await Workspace.open(path.join(workspaceRoot, 'workspace'))
+      try {
+        const imagePath = path.join(workspaceRoot, 'reference.png')
+        await sharp({ create: { width: 48, height: 64, channels: 3, background: '#ad8d84' } }).png().toFile(imagePath)
+        const image = await ws.importImage(imagePath)
+        const product = await ws.products.save({ name: 'Fixture product', description: '', notes: '', assetIds: [image.id], primaryAssetId: image.id })
+        const theme = await ws.themes.save({ name: 'Fixture reel', description: '', outputType: 'reel', aspectRatio: '9:16', defaultDuration: 15, coverAssetId: image.id, storyboardAssetId: image.id, referenceAssetIds: [], masterPrompt: 'Show the product.', compositionPrompt: '', scenes: [{id:crypto.randomUUID(),name:'Show product',prompt:'Show the product.',duration:15,relationship:'new-shot',transition:'cut'}] })
+        const project = await ws.projects.save({ name: 'Fixture reel collection', productId: product.id, themeId: theme.id, characterId: null, outputType: 'reel', preset: 'reel-vertical', duration: 15, storyboard: singleReelStoryboard(theme) })
+        const scene = project.storyboard.scenes[0]
+        const attempt = await ws.generations.prepare(project.id, scene.id)
+        await ws.generations.setState(attempt.id, 'submission-uncertain')
+        ws.flow.saveJob({attemptId: attempt.id,projectId: project.id, projectUrl: url, stage: 'waiting', message: 'Fixture generation completed.', baseline: [], outputs: 1, resultIds: [], imported: {}, updatedAt: '', submissionAcknowledged: true})
+        await page.evaluate(() => { window.fixture.actualDownload = true })
+        // Only the remote page is simulated. The Chrome download and the
+        // production coordinator, importer, FFmpeg and saved file are real.
+        const driver = {
+          async results() {
+            const reply = await command(page, 'results', {url, prompt, outputType:'reel', baseline:[]})
+            assert.equal(reply.ok, true, reply.error)
+            return reply.value.results
+          },
+          async download(_url, remote, directory) {
+            const downloadEvent = page.waitForEvent('download', {timeout: 10000})
+            const reply = await command(page, 'downloadOriginal', {url, result: remote})
+            assert.equal(reply.ok, true, reply.error)
+            const downloaded = await downloadEvent
+            assert.match(downloaded.suggestedFilename(), /_e7414b4c\.mp4$/)
+            const staging = path.join(workspaceRoot, 'source.mp4')
+            await downloaded.saveAs(staging)
+            assert.equal((await stat(staging)).size, (await stat(sample)).size)
+            return new FlowResultFiles(directory, url, remote.id).store(staging)
+          },
+        }
+        const coordinator = new FlowCoordinator(async () => ws, driver, 100, 20000)
+        await coordinator.resume(attempt.id)
+        const started = Date.now()
+        let visibleBeforeCleanup = false
+        while (coordinator.busy && Date.now() - started < 30000) {
+          visibleBeforeCleanup ||= ws.generations.get(attempt.id).state === 'ready-for-review' && !!ws.flow.job(attempt.id).reelCleanupPending
+          await new Promise(resolve => setTimeout(resolve, 50))
+        }
+        assert.equal(coordinator.busy, false)
+        assert.ok(visibleBeforeCleanup, 'The downloaded clip appears while cleanup is running')
+        const saved = ws.flow.job(attempt.id)
+        assert.equal(saved.stage, 'complete', saved.message)
+        assert.match(saved.message, /Visible Gemini logo cleaned/)
+        const file = await ws.generations.resultFile(attempt.id)
+        assert.match(file.path, /Final Projects/)
+        assert.ok((await stat(file.path)).size > 1_000_000)
+        assert.notEqual((await stat(file.path)).size, (await stat(sample)).size)
+        assert.equal(await page.evaluate(() => window.fixture.originalDownloads), 1)
+        console.log(`Saved cleaned fixture MP4: ${file.path}`)
+      } finally { await ws.close() }
+      return
+    }
+    const download = await command(page, 'downloadOriginal', {url, result: result.value.results[0]})
+    assert.equal(download.ok, true, download.error)
+    assert.equal(await page.evaluate(() => window.fixture.originalDownloads), 1)
   })
   await check('result panels without aria-expanded close between products and recover a stale panel', async page => {
     await page.evaluate(() => {
@@ -541,7 +661,7 @@ try {
     await page.locator('flow-grid-tile-container img').last().evaluate(image=>image.decode())
     for(const id of ['first','second','third']) {
       const result=await command(page,'results',{url,prompt:`product ${id}`,outputType:'post',baseline:[]})
-      assert.equal(result.ok,true,result.error);assert.deepEqual(result.value.map(item=>item.id),[id])
+      assert.equal(result.ok,true,result.error);assert.deepEqual(result.value.results.map(item=>item.id),[id])
       assert.equal(await page.locator('flow-info-panel').count(),0)
     }
     assert.equal(await page.evaluate(()=>window.fixture.submissions),0)
@@ -565,7 +685,7 @@ try {
     })
     await page.locator('flow-grid-tile-container img').last().evaluate(image=>image.decode())
     const result=await command(page,'results',{url,prompt:'prompt third',outputType:'post',baseline:[]})
-    assert.equal(result.ok,true,result.error);assert.deepEqual(result.value.map(x=>x.id),['third'])
+    assert.equal(result.ok,true,result.error);assert.deepEqual(result.value.results.map(x=>x.id),['third'])
     assert.equal(await page.locator('flow-info-panel .prompt-text').filter({visible:true}).count(),0)
     assert.equal(await page.locator('flow-info-panel').count(),3,'Closed Angular panels may remain in DOM without blocking another result')
     assert.equal(await page.evaluate(()=>window.fixture.submissions),0)

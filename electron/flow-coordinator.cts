@@ -44,11 +44,11 @@ export class FlowCoordinator {
       // This runs in the desktop main process, including when the project page
       // is closed. It never prepares/uploads/creates a project or clicks Generate.
       const eligible:FlowJob[]=[]
-      for (const job of ws.flow.pendingCollection()) {
+      for (const job of [...ws.flow.pendingReelCleanup(), ...ws.flow.pendingCollection()]) {
         if (!this.currentOperation) break
         if (this.scopeProjectId && job.projectId !== this.scopeProjectId) continue
         if (this.processing.has(job.attemptId)) continue
-        if (ws.generations.get(job.attemptId).state !== 'submission-uncertain') continue
+        if (!job.reelCleanupPending && ws.generations.get(job.attemptId).state !== 'submission-uncertain') continue
         if (this.stopping || this.currentOperation?.cancelled) break
         if (job.nextCollectionAt && Date.parse(job.nextCollectionAt) > Date.now()) continue
         if (!retryCollection(job.message)) continue
@@ -341,11 +341,38 @@ export class FlowCoordinator {
       const activity = recordActivity(job.activity, item)
       if (activity !== job.activity) update({ activity, ...(item.state !== 'pending' ? { message: item.detail } : {}) })
     }
+    const finishReel = async () => {
+      const id = job.attemptId
+      const label = 'Local video cleanup'
+      let detail = 'Reel saved in Clips. No supported visible logo was detected.'
+      let state: 'done' | 'error' = 'done'
+      report({ id: 'reel-cleanup', label, state: 'running', detail: 'Reel is playable in Clips. Checking the logo locally.' })
+      try {
+        const attempt = ws.generations.get(id)
+        const source = (await ws.generations.resultFile(id)).path
+        const cleaned = await ws.exports.normalizeFlowResult(attempt.preset, source, id, (_message, removed) => {
+          if (removed) detail = 'Reel saved in Clips. Visible Gemini logo cleaned.'
+        })
+        check()
+        if (cleaned !== source) await ws.generations.replaceWithCleanReel(id, cleaned)
+      } catch {
+        check()
+        state = 'error'
+        detail = 'Reel saved in Clips. Local logo cleanup could not finish; the downloaded video is playable.'
+      }
+      report({ id: 'reel-cleanup', label, state, detail })
+      update({ stage: 'complete', reelCleanupPending: false, collectionStopped: false, nextCollectionAt: undefined, collectionFailures: 0, message: detail })
+      await ws.paths.removeFlowStage(id).catch(() => {})
+    }
     try {
       check()
       const attempt = ws.generations.get(job.attemptId)
       if (attempt.projectId !== job.projectId || (this.scopeProjectId && job.projectId !== this.scopeProjectId)) throw new StorageError('INVALID_REQUEST', 'Flow job association is ambiguous: project ownership does not match.')
-      if (!submit && attempt.state === 'ready-for-review') { update({ stage: 'complete', message: 'All downloaded results are saved in Final Projects.' }); return }
+      if (!submit && attempt.state === 'ready-for-review') {
+        if (job.reelCleanupPending && attempt.outputType === 'reel') await finishReel()
+        else update({ stage: 'complete', message: 'All downloaded results are saved in Final Projects.' })
+        return
+      }
       if (mode === 'poll' && job.nextCollectionAt && Date.parse(job.nextCollectionAt) > Date.now()) return
       if (submit) {
         const project = await ws.projects.get(job.projectId)
@@ -441,6 +468,13 @@ export class FlowCoordinator {
             const directory = await ws.paths.directory(`temp/flow/${localId}`)
             const file = await (this.browser.exclusive ? this.browser.exclusive(() => this.browser.download(job.projectUrl, result, directory)) : this.browser.download(job.projectUrl, result, directory))
             check()
+            if (attempt.outputType === 'reel' && job.outputs === 1 && localId === attempt.id) {
+              update({ reelCleanupPending: true })
+              await ws.generations.importResult(attempt.id, file)
+              report({ id: downloadId, label, state: 'done', detail: 'Reel downloaded and playable in Clips.' })
+              await finishReel()
+              return
+            }
             report({ id: downloadId, label, state: 'running', detail: 'Download complete. Checking the visible Gemini logo locally before saving the project media.' })
             let logoRemoved = false
             const progressId=existing?.id??attempt.id

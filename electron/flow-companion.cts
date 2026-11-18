@@ -122,8 +122,8 @@ export class FlowCompanion {
     try {
       const value = await this.request<{ url: string; title: string; ready: boolean; companionVersion?: string; adapterVersion?: string }>('inspect')
       if (!value || typeof value.url !== 'string' || !allowedFlowPage(value.url) || value.ready !== true) invalid('Selected tab is not a signed-in Flow workspace. Finish sign-in manually and reconnect the companion.')
-      if (!['0.1.6','0.1.7','0.1.8','0.1.9','0.1.10','0.1.11','0.1.12','0.1.13','0.1.14','0.1.15','0.1.16','0.1.17','0.1.18'].includes(value.companionVersion??'')) invalid('Old Flow companion code is still loaded. Use Flow Bridge from this app, reload it in chrome://extensions, refresh the Flow tab, then pair again.')
-      if (value.adapterVersion !== '0.1.6-fast.32') invalid(`Flow tab is running ${value.adapterVersion || 'an older adapter'}. Reload companion 0.1.6-fast.32 in chrome://extensions, refresh the Flow tab, then pair again. The current fixes are not loaded in that tab yet.`)
+      if (!['0.1.6','0.1.7','0.1.8','0.1.9','0.1.10','0.1.11','0.1.12','0.1.13','0.1.14','0.1.15','0.1.16','0.1.17','0.1.18','0.1.19','0.1.20'].includes(value.companionVersion??'')) invalid('Old Flow companion code is still loaded. Use Flow Bridge from this app, reload it in chrome://extensions, refresh the Flow tab, then pair again.')
+      if (value.adapterVersion !== '0.1.6-fast.34') invalid(`Flow tab is running ${value.adapterVersion || 'an older adapter'}. Reload companion 0.1.6-fast.34 in chrome://extensions, refresh the Flow tab, then pair again. The current fixes are not loaded in that tab yet.`)
       this.connection = { state: 'connected', message: `Flow companion ${value.companionVersion} connected to your selected Flow tab. Live generation compatibility still requires verification.`, pageTitle: String(value.title).slice(0, 200), checkedAt: new Date().toISOString() }
     } catch (error) { this.connection = { ...this.connection, state: 'needs-attention', message: error instanceof Error ? error.message : 'Could not verify the selected Flow tab.', checkedAt: new Date().toISOString() } }
     return this.status()
@@ -233,7 +233,7 @@ export class FlowCompanion {
     const inspected = response as { results?: unknown; diagnostic?: unknown } | null
     const results = Array.isArray(response) ? response : inspected?.results
     if (typeof inspected?.diagnostic === 'string') this.resultDetails.set(scope ?? url, inspected.diagnostic.slice(0, 400))
-    if (!Array.isArray(results) || results.length > 4 || results.some(item => !item || typeof item.id !== 'string' || typeof item.selector !== 'string')) invalid('Invalid Flow result association.')
+    if (!Array.isArray(results) || results.length > 4 || results.some(item => !item || typeof item.id !== 'string' || typeof item.selector !== 'string' || item.originalVideo !== undefined && item.originalVideo !== true)) invalid('Invalid Flow result association.')
     return results
   }
   async download(url: string, result: RemoteResult, directory: string, scope?: string): Promise<string> {

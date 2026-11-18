@@ -410,8 +410,17 @@ function registerBridge() {
         let removed=false
         if(attempt.value.outputType==='post')generations.beginLogoCleanup(attempt.value.id)
         let source:string
-        try{source = attempt.value.outputType === 'post' ? await ws.exports.normalizeFlowResult(attempt.value.preset, choice.filePaths[0], attempt.value.id,(_detail,value)=>{removed=value},(percent,message)=>generations.logoProgress(attempt.value.id,percent,message)) : choice.filePaths[0]}
-        catch(error){if(attempt.value.outputType==='post')generations.failLogoCleanup(attempt.value.id,'Local cleanup failed. Resume or retry the existing result.');throw error}
+        try {
+          source = await ws.exports.normalizeFlowResult(attempt.value.preset, choice.filePaths[0], attempt.value.id,
+            (_detail,value) => { removed = value },
+            (percent,message) => { if (attempt.value.outputType === 'post') generations.logoProgress(attempt.value.id, percent, message) })
+        } catch (error) {
+          if (attempt.value.outputType === 'post') {
+            generations.failLogoCleanup(attempt.value.id, 'Local cleanup failed. Resume or retry the existing result.')
+            throw error
+          }
+          source = choice.filePaths[0]
+        }
         const result = await generations.importResult(attempt.value.id, source)
         if(attempt.value.outputType==='post')generations.recordLogoCleanup(attempt.value.id,removed)
         await ws.paths.removeFlowStage(attempt.value.id).catch(() => {})

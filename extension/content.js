@@ -3,7 +3,7 @@
 (() => {
   if (globalThis.__frameStudioCompanion) return
   globalThis.__frameStudioCompanion = true
-  const ADAPTER_VERSION = '0.1.6-fast.32'
+  const ADAPTER_VERSION = '0.1.6-fast.34'
   const seen = new Map()
   let prepared = null
   let submission = null
@@ -491,7 +491,8 @@
       await closeStaleMenus()
       const more = one([...current.tile.querySelectorAll('button[aria-label="More options"]')], 'reference menu')
       more.click()
-      await menuControl(/^add to prompt$/i, 'Add to prompt')
+      const add = await menuControl(/^add to prompt$/i, 'Add to prompt')
+      click(add, 'Add to prompt')
       await wait(() => attachmentPresent(name), `photo processing finished and attached in prompt: ${name}`, 240000)
       referenceCheck.phase = 'complete'
       return
@@ -849,26 +850,59 @@
   }
   function cards() {
     const result = new Map()
-    for (const element of document.querySelectorAll('flow-grid-tile-container,[data-asset-id],[data-generation-id],article,[role="listitem"]')) {
-      if (!visible(element)) continue
+    const nativeTile = 'flow-grid-tile-container'
+    for (const element of document.querySelectorAll(`${nativeTile},[data-asset-id],[data-generation-id],article,[role="listitem"]`)) {
+      const native = element.matches(nativeTile)
+      // A Flow tile can be a layout host with display:contents. Its renderable
+      // media and controls are visible even though the host has no CSS box.
+      if (!visible(element) && !(native && getComputedStyle(element).display === 'contents' &&
+        [...element.querySelectorAll('[data-media-id],img,video,button,[role="button"]')].some(visible))) continue
       const video = element.querySelector('video'), img = element.querySelector('img'), isVideo = videoCard(element)
-      if (!video && !img) continue
-      if (element.matches('flow-grid-tile-container')) {
-        const media = element.matches('[data-media-id]') ? element : element.querySelector('[data-media-id]')
-        const id = media?.getAttribute('data-media-id')
+      if (native) {
+        const identityAttributes = ['data-media-id', 'data-video-id', 'data-asset-id', 'data-generation-id']
+        let identity = ''
+        let id = ''
+        for (const attribute of identityAttributes) {
+          const own = element.getAttribute(attribute)
+          const child = element.querySelector(`[${attribute}]`)?.getAttribute(attribute)
+          if (!own && !child) continue
+          id = own || child
+          const match = `[${attribute}="${CSS.escape(id)}"]`
+          identity = own ? nativeTile + match : `${nativeTile}:has(${match})`
+          break
+        }
+        // Posters and videos can expose the asset only in a rendered URL.
+        // The immutable ID is in the path; signed query values may rotate.
+        if (!id) {
+          for (const media of element.querySelectorAll('video,source,img,a[href]')) {
+            for (const attribute of ['src', 'poster', 'href']) {
+              const value = media.getAttribute(attribute)
+              if (!value) continue
+              let url
+              try { url = new URL(value, location.href) } catch { continue }
+              if (url.origin !== 'https://flow-content.google') continue
+              const match = /^\/(?:image|video)\/([0-9a-f-]{36})$/i.exec(url.pathname)
+              if (!match) continue
+              id = match[1]
+              identity = `${nativeTile}:has([${attribute}*="${CSS.escape(id)}"])`
+              break
+            }
+            if (id) break
+          }
+        }
         // Include uploaded media in the baseline too. Result ownership is
         // established by its full prompt, not the hover toolbar's aria label.
         if (!id) continue
-        const busy = element.querySelector('[role="progressbar"],[aria-busy="true"]')
+        const busy = element.getAttribute('aria-busy') === 'true' || [...element.querySelectorAll('[role="progressbar"],[aria-busy="true"]')].some(visible)
         // Flow can show a finished video as a loaded poster and play overlay.
         // Playback metadata is lazy and must not gate result collection.
         const posterReady = !!img?.complete && img.naturalWidth > 0
         const videoReady = !!video && (video.readyState >= 1 || !!video.poster && !!element.querySelector('button[aria-label="More options"]'))
-        const selector = element.hasAttribute('data-media-id') ? `flow-grid-tile-container[data-media-id="${CSS.escape(id)}"]` : `flow-grid-tile-container:has([data-media-id="${CSS.escape(id)}"])`
-        result.set(id, { id, selector, kind: isVideo ? 'reel' : 'post', native: true,
-          ready: !busy && (isVideo ? posterReady || videoReady : posterReady) })
+        result.set(id, { id, selector: identity, kind: isVideo ? 'reel' : 'post', native: true,
+          ready: !busy && (posterReady || videoReady), videoMenuReady: !busy && resultMenu(element).length === 1 })
         continue
       }
+      if (element.closest(nativeTile) || (!video && !img)) continue
       const attr = element.hasAttribute('data-asset-id') ? 'data-asset-id' : element.hasAttribute('data-generation-id') ? 'data-generation-id' : null
       const link = element.querySelector('a[href*="/asset/"]')
       const id = attr ? element.getAttribute(attr) : link?.getAttribute('href')
@@ -921,7 +955,7 @@
     const card = one([...document.querySelectorAll(result.selector)], 'matched result')
     const embedded = compact(card.getAttribute('data-prompt') || card.getAttribute('data-generation-prompt') || card.querySelector('[data-prompt]')?.getAttribute('data-prompt'))
     if (embedded) { resultPrompts.set(key, embedded); return embedded }
-    const footers = [...card.querySelectorAll('button.footer-left')]
+    const footers = [...card.querySelectorAll('button.footer-left,[role="button"].footer-left')]
     const named = [...card.querySelectorAll('button,[role="button"]')].filter(button => /^(?:view prompt|show prompt|generation details|view generation details|result information)$/i.test(label(button)))
     if (!footers.length && !named.length) return ''
     const footer = one(footers.length ? footers : named, 'result information')
@@ -936,8 +970,8 @@
       const deadline = Date.now() + 5000
       while (Date.now() < deadline) {
         const panels = [...document.querySelectorAll('flow-info-panel .prompt-text')].filter(visible)
-        if (panels.length === 1 && compact(panels[0].textContent)) {
-          const prompt = compact(panels[0].textContent)
+        if (panels.length === 1 && compact(panels[0].innerText || panels[0].textContent)) {
+          const prompt = compact(panels[0].innerText || panels[0].textContent)
           resultPrompts.set(key, prompt)
           if (resultPrompts.size > 100) resultPrompts.delete(resultPrompts.keys().next().value)
           return prompt
@@ -951,20 +985,50 @@
       await closeResultInfo(footer)
     }
   }
+  function resultMenu(card) {
+    return [...card.querySelectorAll('button,[role="button"]')].filter(button =>
+      /^more (?:options|actions)$/i.test(label(button)) || glyphMatches(button, /^(?:more_vert|more_horiz)$/i))
+  }
+  function resultMenuItems(pattern) {
+    return [...document.querySelectorAll('[role="menuitem"],[role="menu"] button')].filter(element => {
+      if (!visible(element) || element.closest('[aria-disabled="true"],[disabled]')) return false
+      const clone = element.cloneNode(true)
+      clone.querySelectorAll(`${glyphSelector},[aria-hidden="true"]`).forEach(icon => icon.remove())
+      // Keep line boundaries between “720p” and its “Original size” subtitle.
+      const name = compact(clone.textContent).replace(/^(\d+[kp])(?=Original size)/i, '$1 ')
+      return pattern.test(name) || pattern.test(label(element))
+    }).filter((item, _, all) => !all.some(other => other !== item && item.contains(other)))
+  }
   async function menuControl(pattern, description) {
     const deadline = Date.now() + 5000
     while (Date.now() < deadline) {
-      const matches = [...document.querySelectorAll('[role="menuitem"]')].filter(element => {
-        if (!visible(element)) return false
-        const clone = element.cloneNode(true)
-        clone.querySelectorAll('mat-icon,svg,[aria-hidden="true"]').forEach(icon => icon.remove())
-        return pattern.test(compact(clone.textContent))
-      })
-      if (matches.length === 1) { click(matches[0], description); return }
+      const matches = resultMenuItems(pattern)
+      if (matches.length === 1) return matches[0]
       if (matches.length > 1) throw new Error(`Flow has multiple ${description} controls. Close its menus and resume collection.`)
       await new Promise(resolve => setTimeout(resolve, 100))
     }
     throw new Error(`Flow did not expose ${description}. The generated result is preserved.`)
+  }
+  const originalSize = /^(?:\d+(?:\.\d+)?[kp]\s*)?original size$/i
+  const originalVideo = /^\d{3,4}p\s*original size$/i
+  async function openResultDownload(card) {
+    await closeStaleMenus()
+    one(resultMenu(card), 'result menu').click()
+    const download = await menuControl(/^download$/i, 'Download')
+    // Flow shows the resolution submenu on hover. Some layouts also open it
+    // on click. Avoid clicking once a submenu is already present.
+    download.dispatchEvent(new MouseEvent('mouseenter'))
+    await new Promise(resolve => setTimeout(resolve, 200))
+    if (!resultMenuItems(originalSize).length) click(download, 'Download')
+  }
+  async function originalVideoAvailable(result) {
+    const card = one([...document.querySelectorAll(result.selector)], 'matched result')
+    if (resultMenu(card).length !== 1) return false
+    try {
+      await openResultDownload(card)
+      await menuControl(originalSize, 'Original size download')
+      return resultMenuItems(originalVideo).length === 1
+    } finally { await closeStaleMenus() }
   }
   async function execute(action, payload) {
     guard(payload.url)
@@ -1080,7 +1144,7 @@
         if (compact(promptText(editor)) !== compact(payload.prompt)) throw new Error('The complete prompt was not retained in Flow.')
       }
       if (checkpoint) { checkpoint.promptDone = true; await persistPreparation() }
-      return { sourceRatio: actualRatio, targetRatio: ratio, automaticCrop: actualRatio !== ratio, checkpoint }
+      return { sourceRatio: actualRatio, targetRatio: ratio, automaticCrop: actualRatio !== ratio, ...(checkpoint ? { checkpoint } : {}) }
     }
     // Developer upload-only verification uses the same attach implementation,
     // preserves the live prompt/settings and clears its state before returning.
@@ -1187,39 +1251,47 @@
       })
       if(failed)throw new Error(`Flow generation failed: ${compact(failed.textContent).slice(0,350)}. Other products can continue; this request is not automatically resubmitted.`)
       const results = [], observed = cards()
-      const candidates = observed.filter(item => item.kind === payload.outputType && !payload.baseline.includes(item.id))
+      // A native card can be a poster with no video tag or accessible play
+      // glyph. Match its saved prompt first, then use Flow's download format
+      // to confirm the media type when the poster is the only visible media.
+      const candidates = observed.filter(item => !payload.baseline.includes(item.id) &&
+        (item.kind === payload.outputType || (payload.outputType === 'reel' && item.native)))
       let missingPrompt = 0, differentPrompt = 0
-      for (const item of candidates.filter(item => item.ready)) {
+      const readyCards = candidates.filter(item => item.ready || payload.outputType === 'reel' && item.videoMenuReady)
+      for (const item of readyCards) {
         let prompt
         try { prompt = await resultPrompt(item) }
         catch (error) { if (/^Flow result prompt is not available yet\./.test(error.message)) { missingPrompt++; continue }; throw error }
-        if (item.native ? prompt === compact(payload.prompt) : prompt.includes(compact(payload.prompt))) results.push({ id: item.id, selector: item.selector })
-        else if (!prompt) missingPrompt++
-        else differentPrompt++
+        if (!prompt) { missingPrompt++; continue }
+        if (item.native ? prompt !== compact(payload.prompt) : !prompt.includes(compact(payload.prompt))) { differentPrompt++; continue }
+        if (payload.outputType === 'reel' && item.native && (item.kind !== 'reel' || !item.ready) && !await originalVideoAvailable(item)) continue
+        results.push({ id: item.id, selector: item.selector, ...(payload.outputType === 'reel' ? { originalVideo: true } : {}) })
       }
-      const ready = candidates.filter(item => item.ready).length
-      const diagnostic = `${candidates.length} new ${payload.outputType === 'reel' ? 'video' : 'image'} card(s), ${ready} ready, ${missingPrompt} without a readable full prompt, ${differentPrompt} with a different prompt.`
+      const ready = readyCards.length
+      const diagnostic = `${candidates.length} new card(s), ${ready} ready, ${missingPrompt} without a readable full prompt, ${differentPrompt} with a different prompt.`
       return { results, diagnostic }
     }
     if (action === 'downloadOriginal') {
-      const result = cards().find(item => item.id === payload.result?.id && item.ready && item.native)
+      const result = cards().find(item => item.id === payload.result?.id && item.native &&
+        (item.ready || payload.result.originalVideo && item.videoMenuReady))
       if (!result) throw new Error('The matching result is no longer available.')
       const card = one([...document.querySelectorAll(result.selector)], 'matched result')
-      // These hotbar controls are intentionally revealed on hover in Flow.
-      await closeStaleMenus()
-      const more = one([...card.querySelectorAll('button[aria-label="More options"]')], 'result menu')
-      more.click()
-      await menuControl(/^download$/i, 'Download')
-      await menuControl(/^(?:\d+(?:\.\d+)?[kp]\s*)?original size$/i, 'Original size download')
+      await openResultDownload(card)
+      const original = await menuControl(payload.result.originalVideo ? originalVideo : originalSize, 'Original size download')
+      click(original, 'Original size download')
       return null
     }
     if (action === 'downloadLink') {
       // Resolve from currently observed IDs instead of trusting an arbitrary CSS
       // selector sent across the bridge.
-      const result = cards().find(item => item.id === payload.result?.id && item.ready)
+      const result = cards().find(item => item.id === payload.result?.id &&
+        (item.ready || payload.result.originalVideo && item.videoMenuReady))
       if (!result) throw new Error('The matching result card is no longer visible.')
       const card = one([...document.querySelectorAll(result.selector)], 'matched result')
-      if (result.native) return { mode: 'native-menu', title: card.getAttribute('aria-label') || '' }
+      if (result.native) {
+        const title = card.getAttribute('aria-label') || controlText(card.querySelector('.footer-left') || card)
+        return { mode: 'native-menu', title: title.slice(0, 500) }
+      }
       const link = one([...card.querySelectorAll('a[download][href]')], 'direct result download')
       const name = link.getAttribute('download') || new URL(link.href).pathname
       const extension = name.split('.').pop().toLowerCase()

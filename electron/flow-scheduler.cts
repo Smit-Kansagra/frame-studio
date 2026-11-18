@@ -57,7 +57,7 @@ export class FlowScheduler {
   async collectPending() {
     if (this.stopping) return
     const ws = await this.workspace()
-    const projects=new Set([...ws.flow.pendingCollection(),...ws.flow.queuedEdits()].map(job=>job.projectId))
+    const projects=new Set([...ws.flow.pendingReelCleanup(),...ws.flow.pendingCollection(),...ws.flow.queuedEdits()].map(job=>job.projectId))
     await Promise.allSettled([...projects].map(async id=>{const runner=this.runner(id);await runner.collectPending();await runner.drainQueuedEdits()}))
   }
   async stopDeletedProject(projectId: string) { await this.runners.get(projectId)?.stopDeletedProject(projectId) }
